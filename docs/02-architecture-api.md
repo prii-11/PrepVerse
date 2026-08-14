@@ -23,7 +23,7 @@ User
 Resume
 ├── userId
 ├── storageKey, originalFilename, mimeType, size   ← object storage ref, not the file
-├── status (UPLOADED | PROCESSING | ANALYZED | FAILED)
+├── status (UPLOADED | ANALYZED | FAILED)  ← no PROCESSING; MVP upload is synchronous
 ├── analysis (embedded, structured — no raw LLM dump)
 │    ├── extractedSkills[], experienceSummary, projects[]
 │    ├── strengths[], skillGaps[]
@@ -153,12 +153,12 @@ AI Orchestrator call
 
 ## 3. API Contract (v1)
 
-Layering per request: `Validation → Auth (JWT) → Authorization → Controller → Service → Model`. All protected routes require `Authorization: Bearer <token>`, enforced by `authMiddleware` (currently an empty placeholder in the existing skeleton — this is the first real implementation task).
+Layering per request (see §2.2 for the full, authoritative pipeline): `IP Rate Limit → Auth (JWT) → Authorization → [Per-user AI Rate Limit, AI routes only] → Validation → Controller → Service → Model`. All protected routes require `Authorization: Bearer <token>`, enforced by `authMiddleware`.
 
 ### Auth
 | Method | Path | Notes |
 |---|---|---|
-| POST | /api/v1/auth/register | firstName, lastName, email, password |
+| POST | /api/v1/auth/register | firstName, lastName, email, password. Returns { token, user } — same shape as login. Registration auto-authenticates (per docs/01's Sign up → Onboarding flow, which assumes no separate login step is required immediately after account creation). |
 | POST | /api/v1/auth/login | returns { token, user } |
 | POST | /api/v1/auth/logout | invalidate client-side token (stateless JWT — no server blacklist for MVP) |
 | GET | /api/v1/auth/me | current user (protected) |
@@ -173,7 +173,7 @@ Layering per request: `Validation → Auth (JWT) → Authorization → Controlle
 ### Resumes
 | Method | Path | Notes |
 |---|---|---|
-| POST | /api/v1/resumes | upload → status: PROCESSING, kicks off AI Orchestrator (sync for MVP) |
+| POST | /api/v1/resumes | synchronous: upload → extraction + AI analysis → status: ANALYZED or FAILED (no PROCESSING state; see §2.3) |
 | GET | /api/v1/resumes | list user's resumes |
 | GET | /api/v1/resumes/:id | includes analysis once status: ANALYZED |
 | DELETE | /api/v1/resumes/:id | |
