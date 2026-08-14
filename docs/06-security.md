@@ -27,7 +27,7 @@
 
 4. **Explicit authorization rule**, stated once, applies everywhere: *resource ownership (`resource.userId === req.user.id`) is enforced at the service layer for every user-owned resource — Resume, Interview, AIExecution.* No controller trusts an ID from the URL without this check.
 
-5. **Auth upgraded to access + refresh tokens** at this point in the review history (short-lived access ~15 min, refresh 7–30 days, refresh token revocable on logout). ***Superseded later*** — reverted back to stateless short-lived JWT during the Design 8 review round as unnecessary complexity for this project's scope. §1.1 below reflects the final decision; this line is kept only as a historical record of the review process.
+5. **Auth strategy: access + refresh tokens were proposed at an earlier point in this document's review history** (short-lived access ~15 min, refresh 7–30 days, refresh token revocable on logout). ***Superseded.*** The proposal is recorded here for history only — it was never implemented. §1.1 below states the actual accepted decision and why.
 
 6. **`AIExecution` gains `entityType` + `entityId`** so a failed execution can be traced back to the specific Resume or Interview that triggered it.
 
@@ -39,7 +39,7 @@
 
 ### 1.1 Token strategy — FINAL: stateless short-lived JWT
 
-*(This section originally proposed access + refresh tokens. That was superseded during the Design 8 review round — reverted to stateless JWT as unnecessary complexity for this project's scope. This is the current, final decision, not a fallback.)*
+*(An earlier draft of this document proposed access + refresh tokens. That proposal is superseded — it was never implemented. The decision below is accepted for this project's current scope: stateless short-lived JWT keeps the authentication surface proportional to a portfolio/demo-scale MVP with no production SLA. This can be revisited via a new ADR if server-side session revocation or longer-lived sessions become an actual requirement.)*
 
 ```
 Login success

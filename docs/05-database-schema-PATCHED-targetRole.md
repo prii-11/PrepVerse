@@ -212,7 +212,7 @@ No `refreshtokens` collection — final auth decision is stateless short-lived J
 
 This is a small, manually curated seed collection (a handful of common roles: Backend Developer, Frontend Developer, Full-Stack, Data/ML, etc.) — not user-editable in MVP, not AI-generated. It's the deterministic denominator for `skillCoverage`. Gemini's resume analysis can *suggest* additions, but nothing writes to this collection automatically — a human (you) curates it, at least for MVP.
 
-**Open question flagged, not decided unilaterally:** should an unrecognized `targetRole` (user types something not in the catalog) block onboarding, fuzzy-match to the closest known role, or fall back to a generic/default skill set? This affects the Users module's onboarding validation and is worth a product decision before implementation.
+**Resolved (was previously left as an open question in this doc — decision made during Design 5's review round but never back-filled here):** `targetRole` is **catalog-backed, not free text**. Onboarding/profile UI presents a dropdown of exactly the roles that exist in `RoleSkillCatalog` — there is no text-entry path that could produce an unrecognized value in normal use. If a `targetRole` value is submitted that doesn't exactly match a `RoleSkillCatalog.role`, the request is **rejected with a `ValidationError`** listing the valid options — no fuzzy-matching, no silent fallback to a generic skill set. This keeps `skillCoverage`'s denominator (§ above) deterministic and prevents an unrecognized role from silently producing meaningless coverage numbers.
 
 ---
 
