@@ -152,6 +152,7 @@ No `refreshtokens` collection — final auth decision is stateless short-lived J
       weaknesses: [String],
       improvementTip: String,
       topicAssessments: [{
+        skillKey: { type: String, required: true },
         topic: String,
         addressed: Boolean,
         quality: { type: String, enum: ['missing', 'weak', 'good', 'strong'] }
