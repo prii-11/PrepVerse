@@ -1,7 +1,56 @@
-// InterviewController — HTTP layer for the interviews module. Thin by design
-// (M2.4): reads request parameters/bodies, calls the service, maps results to
-// HTTP responses, forwards errors to next(). No business logic, no model
-// access, no fabricated endpoint behavior.
-//
-// Route wiring arrives with the endpoint contracts in M3+.
-module.exports = {};
+// InterviewController — HTTP layer for the interviews module. Thin by design:
+// reads req.user (set by auth middleware), req.validatedParams and
+// req.validatedBody (set by the validate middleware), calls the service, maps
+// results to HTTP responses, forwards errors to next(). No business logic, no
+// state transitions, no model access, no AI behavior.
+const interviewService = require('./interview.service');
+
+async function listInterviews(req, res, next) {
+  try {
+    res.status(200).json(await interviewService.listInterviews(req.user.id));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getInterview(req, res, next) {
+  try {
+    res.status(200).json(await interviewService.getInterview(req.user.id, req.validatedParams.id));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function startInterview(req, res, next) {
+  try {
+    res.status(200).json(await interviewService.startInterview(req.user.id, req.validatedParams.id));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function addAnswer(req, res, next) {
+  try {
+    res.status(201).json(await interviewService.addAnswer(req.user.id, req.validatedParams.id, req.validatedBody));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function cancelInterview(req, res, next) {
+  try {
+    res.status(200).json(await interviewService.cancelInterview(req.user.id, req.validatedParams.id));
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getReport(req, res, next) {
+  try {
+    res.status(200).json(await interviewService.getReport(req.user.id, req.validatedParams.id));
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { listInterviews, getInterview, startInterview, addAnswer, cancelInterview, getReport };
