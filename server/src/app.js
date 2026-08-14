@@ -5,6 +5,7 @@ const rateLimiter = require('./middleware/rateLimit');
 const errorHandler = require('./middleware/error');
 const authRoutes = require('./modules/auth/auth.routes');
 const userRoutes = require('./modules/users/user.routes');
+const resumeRoutes = require('./modules/resumes/resume.routes');
 const { NotFoundError } = require('./utils/errors');
 
 const app = express();
@@ -30,6 +31,7 @@ app.get('/', (req, res) => {
 const apiRouter = express.Router();
 apiRouter.use('/auth', authRoutes);
 apiRouter.use('/users', userRoutes);
+apiRouter.use('/resumes', resumeRoutes);
 app.use('/api/v1', apiRouter);
 
 // 404 handler — after every real route, before the error middleware. Uses the
