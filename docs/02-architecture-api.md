@@ -194,7 +194,7 @@ Layering per request (see §2.2 for the full, authoritative pipeline): `IP Rate 
 | Method | Path | Notes |
 |---|---|---|
 | GET | /api/v1/analytics/readiness | computed on read via ReadinessService — { score, breakdown } |
-| GET | /api/v1/analytics/progress | score trend across completed interviews |
+| GET | /api/v1/analytics/progress | score trend across completed interviews, ordered chronologically by `completedAt` (resolved — previously unspecified; `completedAt` chosen over `createdAt`/`report.generatedAt` since it's the field that semantically means "when this interview finished," already a real top-level field as of M4.3) |
 | GET | /api/v1/analytics/practice-plan | computed on-demand from currentSkillProfile |
 
 ### Error shape (consistent across all endpoints)

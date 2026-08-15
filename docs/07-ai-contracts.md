@@ -272,6 +272,14 @@ Call Gemini
                          + 0.25 × skillCoverage + 0.10 × consistency
                          + 0.10 × improvementTrend
 
+technical    = average of report.technicalScore across ALL completed
+               interviews (not just the recent window — this is a
+               lifetime-competence signal, deliberately distinct from
+               consistency/improvementTrend below, which specifically
+               look at recent behavior)
+communication = average of report.communicationScore across ALL
+               completed interviews, same reasoning
+
 consistency = 100 - normalized volatility of recent scores
               (volatility = stddev of last 3-5 overallScores,
                normalized against a reasonable max-expected stddev,
@@ -281,6 +289,36 @@ improvementTrend = normalized slope of overallScore across recent
                     interviews (positive slope → high score,
                     flat → mid, negative → low), clamped [0,100]
 ```
+
+**Resolved gap (this was genuinely undefined — neither "reasonable max-expected stddev" nor "normalized slope" had a concrete mapping anywhere in this or any other design doc; filled in below rather than left for an implementer to invent silently):**
+
+```
+normalizedVolatility = clamp((stddev / MAX_EXPECTED_STDDEV) × 100, 0, 100)
+consistency = 100 - normalizedVolatility
+
+MAX_EXPECTED_STDDEV = 50
+  (rationale: overallScore ∈ [0,100]; a stddev of 50 across a small
+   3-5-point sample already represents near-maximal volatility for
+   a bounded [0,100] range — e.g. alternating between very low and
+   very high scores. Anything at or beyond that saturates the
+   volatility component to fully "inconsistent," consistency = 0.)
+
+normalizedTrend = clamp(50 + (slope / MAX_EXPECTED_SLOPE) × 50, 0, 100)
+improvementTrend = normalizedTrend
+
+slope = linear regression slope of overallScore vs. interview index
+        across the recent window (same window as consistency)
+MAX_EXPECTED_SLOPE = 20
+  (rationale: a candidate improving/declining by 20+ overallScore
+   points per interview, sustained across the window, represents a
+   strong, clearly-visible trend given scores are bounded [0,100].
+   slope = 0 → 50 (flat/neutral), saturates to 100 at +20/interview
+   or beyond, saturates to 0 at -20/interview or beyond.)
+```
+
+**Both constants (`MAX_EXPECTED_STDDEV`, `MAX_EXPECTED_SLOPE`) are proposed defaults, not empirically derived — same status as the readiness formula's own top-level weights and `overallScore`'s `0.70/0.30` split. They should live in the same centralized `SCORING_CONFIG` (per Design 5's tuning principle), not be hardcoded inline, so they're easy to revisit once real interview data exists to check them against.**
+
+**Resolved gap (added — this doc never specified the technical/communication averaging window, only consistency/improvementTrend's "last 3-5"; filled in above rather than left for an implementer to guess):** technical and communication average across the user's full completed-interview history, while consistency and improvementTrend deliberately use only a recent window — this is the intended distinction between "overall competence" and "recent behavior," not an oversight.
 
 This is a `ReadinessService` calculation — computed on read, never stored, per the earlier decision.
 
