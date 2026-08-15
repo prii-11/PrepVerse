@@ -209,7 +209,23 @@ Return a JSON object with this exact shape: { schema }
 
 ### Scoring boundaries
 - All numeric fields clamped to `[0,100]` server-side after the response is parsed, regardless of what Gemini returns — this is the actual enforcement point, not just a prompt instruction
-- `overallScore` (used in the Interview Report) is *not* returned by this operation directly — it is computed by the domain service from validated per-answer sub-scores. The exact report aggregation formula is an implementation detail to be finalized before M4 report aggregation; it must remain deterministic and must never accept an LLM-provided overall score.
+- `overallScore` (used in the Interview Report) is *not* returned by this operation directly — it is computed by the domain service from validated per-answer sub-scores. It must remain deterministic and must never accept an LLM-provided overall score.
+
+**Resolved: `overallScore` and `communicationScore` MVP formulas.** Both are computed by the domain service from persisted per-answer `evaluation` fields (`correctness`, `technicalDepth`, `communication`), never accepted from Gemini directly — same rule as `technicalScore`.
+
+```
+technicalScore     = average across included answers of (0.60×correctness + 0.40×technicalDepth)   [unchanged, pre-existing]
+communicationScore = average across included answers of communication
+overallScore       = average across included answers of (0.50×correctness + 0.30×technicalDepth + 0.20×communication)
+```
+
+`overallScore` is computed from the three base per-answer dimensions directly — not from the already-aggregated `technicalScore`/`communicationScore` report fields — to avoid double-counting `correctness` through `technicalScore`.
+
+**"Included answers" — exclusion is at the whole-answer level, not per-dimension.** `correctness`, `technicalDepth`, and `communication` are populated together in a single Gemini response per answer (all three are required fields in this operation's structured-output schema) — there is no scenario where one is present and another is "not assessed" within the same answer. What varies is whether an *answer* has a completed evaluation at all: only answers with `evaluationStatus === 'COMPLETED'` are included in any of the three averages above. An answer with `evaluationStatus` of `PENDING`, `EVALUATING`, or `FAILED` contributes to none of the three scores — it is not present in the average at all, never treated as a `0`. This mirrors the "silence is not negative evidence" principle already established for skill evidence in `docs/08` §2, applied at the answer-completeness level rather than the dimension level.
+
+**These are proposed MVP defaults, not empirically derived** — same status as `MAX_EXPECTED_STDDEV`/`MAX_EXPECTED_SLOPE` (§6 below) and the readiness formula's own top-level weights. They belong in the same centralized `SCORING_CONFIG`, not hardcoded inline, so they're easy to revisit once real interview data exists.
+
+**Superseded: the `0.70/0.30` reference below (§6) no longer applies to `overallScore`.** That reference was a dangling citation to a formula never actually defined anywhere in this document — verified by exhaustive search, not merely undocumented shorthand for the resolution above. It must not be reconstructed or treated as historical intent; the weights above are a new, deliberate decision, not a recovery of a prior one.
 
 ### Feedback rules
 - `improvementTip` must be a single, specific, actionable sentence — not generic ("practice more") — enforced by prompt instruction; not mechanically validatable, but a schema length cap discourages vague padding
@@ -333,7 +349,7 @@ MAX_EXPECTED_SLOPE = 20
    or beyond, saturates to 0 at -20/interview or beyond.)
 ```
 
-**Both constants (`MAX_EXPECTED_STDDEV`, `MAX_EXPECTED_SLOPE`) are proposed defaults, not empirically derived — same status as the readiness formula's own top-level weights and `overallScore`'s `0.70/0.30` split. They should live in the same centralized `SCORING_CONFIG` (per Design 5's tuning principle), not be hardcoded inline, so they're easy to revisit once real interview data exists to check them against.**
+**Both constants (`MAX_EXPECTED_STDDEV`, `MAX_EXPECTED_SLOPE`) are proposed defaults, not empirically derived — same status as the readiness formula's own top-level weights and `overallScore`'s resolved `0.50/0.30/0.20` split (§4 above). They should live in the same centralized `SCORING_CONFIG` (per Design 5's tuning principle), not be hardcoded inline, so they're easy to revisit once real interview data exists to check them against.**
 
 **Resolved gap (added — this doc never specified the technical/communication averaging window, only consistency/improvementTrend's "last 3-5"; filled in above rather than left for an implementer to guess):** technical and communication average across the user's full completed-interview history, while consistency and improvementTrend deliberately use only a recent window — this is the intended distinction between "overall competence" and "recent behavior," not an oversight.
 

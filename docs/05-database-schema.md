@@ -164,9 +164,9 @@ No `refreshtokens` collection — final auth decision is stateless short-lived J
   }],
 
   report: {
-    overallScore: Number,          // computed: weighted avg of per-answer evaluations
-    technicalScore: Number,        // computed: 0.60×correctness + 0.40×technicalDepth, avg'd
-    communicationScore: Number,
+    overallScore: Number,          // computed: avg over COMPLETED answers of (0.50×correctness + 0.30×technicalDepth + 0.20×communication) — resolved in docs/07 §2, supersedes a dangling 0.70/0.30 reference
+    technicalScore: Number,        // computed: avg over COMPLETED answers of (0.60×correctness + 0.40×technicalDepth)
+    communicationScore: Number,    // computed: avg over COMPLETED answers of communication — resolved in docs/07 §2
     strengths: [String],
     weaknesses: [String],
     recommendations: [String],
