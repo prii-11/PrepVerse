@@ -43,6 +43,23 @@ class RateLimitError extends AppError {
   }
 }
 
+// AI provider failure (docs/07 §5 retry exhaustion; M5.1 §0.5.1). Deliberately
+// distinct from RateLimitError: RateLimitError is the application's own
+// request-rate limiting (middleware/rateLimit.js), while this represents the
+// upstream AI provider (Gemini) failing or rate-limiting the app. The
+// orchestrator may internally classify provider 429 responses for retry, but
+// once retries are exhausted the propagated error is this typed AI-provider
+// failure (502) — never a client-facing 429. `details.retryable` distinguishes
+// an exhausted 429 sequence from a non-retryable provider/network failure for
+// the orchestrator's backoff decision; `details.failure` records the final
+// reason (RATE_LIMITED | SCHEMA_VALIDATION_FAILED | AI_PROVIDER_FAILED) which
+// is also persisted as AIExecution.errorCode.
+class AIProviderError extends AppError {
+  constructor(message = 'AI provider request failed', details) {
+    super('AI_PROVIDER_FAILED', message, 502, details);
+  }
+}
+
 module.exports = {
   AppError,
   NotFoundError,
@@ -50,4 +67,5 @@ module.exports = {
   ConflictError,
   UnauthorizedError,
   RateLimitError,
+  AIProviderError,
 };
