@@ -271,7 +271,24 @@ Call Gemini
                            0.35 × technical + 0.20 × communication
                          + 0.25 × skillCoverage + 0.10 × consistency
                          + 0.10 × improvementTrend
+```
 
+**Resolved: "weighted only toward" means exclusion, not inclusion-at-neutral-value (implemented during M4.4, backfilled here for clarity — not a behavior change).** Components represented only by a neutral prior are excluded entirely from the weighted sum — not included at value 50 with their normal weight. Remaining active components' weights are re-normalized to sum to 1.0:
+
+```
+0 interviews: score = null (no active components)
+1 interview:  active = {technical, communication, skillCoverage}
+              weightSum = 0.35 + 0.20 + 0.25 = 0.80 → score = weighted sum / 0.80
+2 interviews: active = {technical, communication, skillCoverage, improvementTrend}
+              weightSum = 0.35 + 0.20 + 0.25 + 0.10 = 0.90 → score = weighted sum / 0.90
+3+ interviews: active = all five, weightSum = 1.0, base formula unchanged
+```
+
+`consistency`/`improvementTrend` are still *reported* as their neutral-prior value (50) in the response breakdown where applicable — exclusion only affects the weighted score, not what's shown to the user.
+
+**Resolved: missing/unrecognized `targetRole` never fabricates a coverage value.** If `targetRole` is absent or doesn't resolve to a `RoleSkillCatalog` entry, `skillCoverage` is `null` and the overall `score` is `null` — never `0`, `50`, or any other substitute. In practice this only fires pre-onboarding, since Design 05 §5 keeps `targetRole` catalog-backed once onboarding completes.
+
+```
 technical    = average of report.technicalScore across ALL completed
                interviews (not just the recent window — this is a
                lifetime-competence signal, deliberately distinct from
