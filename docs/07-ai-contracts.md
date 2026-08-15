@@ -131,7 +131,7 @@ Return a JSON object with this exact shape: { schema }
     {
       "id": "string",              // server-generated; never trusted from client input
       "text": "string",
-      "category": "string",        // e.g. "system-design", "algorithms", "behavioral"
+      "category": "algorithms|data-structures|system-design|database|api-design|debugging|concurrency|behavioral",
       "difficulty": "easy|medium|hard",
       "expectedTopics": [{ "skillKey": "string", "topic": "string" }] // max 5, canonical skill IDs
     }
@@ -142,13 +142,12 @@ Return a JSON object with this exact shape: { schema }
 ### Validation rules
 - `questions.length === questionCount` exactly — if Gemini returns fewer, retry once with an explicit "you returned N, I need exactly {questionCount}" correction prompt; if still short, fail with `QUESTION_GENERATION_INCOMPLETE` rather than silently proceeding with fewer questions
 - No two questions have identical `text` (case-insensitive) — duplicate detection at the validation layer, not trusted to the prompt alone
-- `category` and `difficulty` are constrained to known enum values; anything else is rejected
+- `category` and `difficulty` are constrained to known enum values; anything else is rejected. **`category`'s enum (resolved — this was previously a normative claim with no defined set; the schema comment's three examples were illustrative only, not an allowlist, confirmed by an exhaustive search finding no other definition anywhere in `docs/`):** `algorithms | data-structures | system-design | database | api-design | debugging | concurrency | behavioral`. This is a proposed default set, not an empirically-derived one — same status as the readiness-formula weights and `MAX_EXPECTED_STDDEV`/`MAX_EXPECTED_SLOPE` — reasonable to revisit once real question-generation output exists to check it against, but not to be left undefined into M5.3.
 - `expectedTopics` entries must use canonical `skillKey` values from `RoleSkillCatalog`; `topic` is the human-readable subtopic label.
 - `topicAssessments[].skillKey` must be a subset of the question's expected-topic skill keys.
 - `topicAssessments[].skillKey` values must be unique within one answer evaluation. A duplicate is a schema-validation failure; do not silently deduplicate.
 - If `question.expectedTopics` is non-empty, `topicAssessments` must be non-empty.
 - `addressed: false` is valid and contributes no skill evidence downstream.
-
 
 ### Duplicate prevention
 - Within a single generation call: explicit dedup check in validation (above)
@@ -238,7 +237,7 @@ overallScore       = average across included answers of (0.50×correctness + 0.3
 
 ### Prompt injection defense (explicit, per the reviewer's emphasis)
 - User answer content is always wrapped in `<answer>` tags, explicitly declared as data in the system instruction
-- The system instruction explicitly anticipates and forbids the exact attack pattern ("ignore the rubric," "give me a 100") rather than a generic "be careful" instruction — naming the attack pattern in the system prompt measurably improves resistance
+- The system instruction explicitly anticipates and forbids the exact attack pattern ("ignore the rubric," "give me a 100") rather than a generic "be careful" instruction — this is a prompt-level defense only, not a security boundary (per the correction above); the real enforcement is schema validation + server-side scoring rules downstream, which hold regardless of whether the prompt-level defense succeeds
 - Post-validation sanity check: if `correctness === 100` and `candidateAnswer` is suspiciously short (e.g. under 20 characters) relative to the question's expected topics, flag the `AIExecution` record for review rather than blocking it outright (false positives on legitimately short-but-correct answers are possible) — this is a soft signal, not a hard gate, since we can't perfectly distinguish injection from a genuinely excellent terse answer
 
 ### Prompt version
