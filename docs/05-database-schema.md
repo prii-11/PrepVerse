@@ -257,7 +257,7 @@ This is a small, manually curated seed collection (a handful of common roles: Ba
 Resume upload → Resume.status: UPLOADED
              → AI Orchestrator (RESUME_ANALYSIS) → AIExecution logged
              → Resume.analysis populated, Resume.status: ANALYZED
-             → User.currentSkillProfile updated (SkillProfileService reads the completed interview topicAssessments and RoleSkillCatalog; resume analysis contributes inventory/source information but does not itself establish assessed skill levels)
+             → User.currentSkillProfile updated (SkillProfileService receives pre-normalized evidence events, not raw topicAssessments — see the corrected note below §7's cross-check diagram; RoleSkillCatalog supplies the required-skill universe; resume analysis contributes inventory/source information but does not itself establish assessed skill levels)
 
 Interview created → Interview.status: CREATED, questionGeneration.status: PENDING
                   → AI Orchestrator (QUESTION_GENERATION), reads
@@ -278,8 +278,12 @@ Submit → Interview.status: EVALUATING
               completed answers still have their evaluations, per Design 7 correction #9)
             else → Interview.report computed (server-side aggregation of
               per-answer evaluations) → Interview.status: COMPLETED
-       → SkillProfileService reads the completed answers' topicAssessments,
-         updates User.currentSkillProfile
+       → SkillProfileService.updateFromInterview() receives pre-normalized
+         skill evidence events { skillKey, signal, answerIds } (produced by
+         the interview→skill backend normalization layer per docs/08 §2 —
+         SkillProfileService does not read raw topicAssessments itself, per
+         docs/08's locked boundary: downstream layers never reinterpret
+         upstream output), updates User.currentSkillProfile
        → ReadinessService computes readiness on next read (not stored)
 ```
 
