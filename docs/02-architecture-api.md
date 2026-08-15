@@ -15,7 +15,6 @@ User
 ├── currentSkillProfile          ← facts only, no derived score
 │    ├── skills[] { name, level, lastAssessed }
 │    ├── skillGaps[]
-│    ├── strengths[]
 │    └── updatedAt
 ├── resumes[]  ────────────────► Resume (referenced, own collection)
 └── interviews[] ──────────────► Interview (referenced, own collection)
