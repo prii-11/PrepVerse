@@ -60,6 +60,14 @@ class AIProviderError extends AppError {
   }
 }
 
+// Pre-check failure for empty/garbled resume text before any AI call.
+// Per docs/07 §2: errorCode: RESUME_TEXT_EXTRACTION_FAILED.
+class ResumeTextExtractionError extends AppError {
+  constructor(message = 'Resume text extraction failed — empty or garbled input') {
+    super('RESUME_TEXT_EXTRACTION_FAILED', message, 400);
+  }
+}
+
 module.exports = {
   AppError,
   NotFoundError,
@@ -68,4 +76,5 @@ module.exports = {
   UnauthorizedError,
   RateLimitError,
   AIProviderError,
+  ResumeTextExtractionError,
 };
