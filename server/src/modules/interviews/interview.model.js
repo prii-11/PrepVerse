@@ -69,6 +69,10 @@ const interviewSchema = new Schema({
     status: { type: String, enum: ['PENDING', 'COMPLETED', 'FAILED'], default: 'PENDING' },
     promptVersion: String,
     model: String,
+    // Set only on FAILED — the failure/error code, never raw model output;
+    // mirrors Resume.failureReason (docs/05 §3) for the same reason (audit
+    // debugging, never exposed to the client as-is). docs/05 §4.
+    failureReason: String,
   },
 
   questions: [questionSchema],

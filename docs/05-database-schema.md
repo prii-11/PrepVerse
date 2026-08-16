@@ -122,7 +122,13 @@ No `refreshtokens` collection — final auth decision is stateless short-lived J
   questionGeneration: {
     status: { type: String, enum: ['PENDING', 'COMPLETED', 'FAILED'], default: 'PENDING' },
     promptVersion: String,
-    model: String
+    model: String,
+    failureReason: String       // set only if status: FAILED — errorCode, not raw model
+                                  // output; mirrors Resume.failureReason (§3) for the same
+                                  // reason (audit debugging, never exposed to the client
+                                  // as-is). Resolved during the M5.3 audit — this field was
+                                  // missing here despite existing on Resume for an
+                                  // equivalent purpose.
   },
 
   questions: [{

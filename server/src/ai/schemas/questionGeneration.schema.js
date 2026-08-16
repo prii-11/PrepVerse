@@ -5,12 +5,10 @@
 // factory: `questions.length === questionCount` exactly, duplicate-text
 // detection (case-insensitive) at the validation layer, and enum constraints.
 //
-// `category` is deliberately a required non-empty STRING, not an enum:
-// docs/07 §3 requires category to be a "known enum value" but no design doc
-// defines the set — the output example's "e.g. system-design, algorithms,
-// behavioral" is explicitly illustrative. docs/05 §4 stores category as a
-// plain String. Resolved for M5.1 as a documented decision: the authoritative
-// category enum must be defined deliberately before M5.3 QuestionGenerator.
+// `category` is constrained to the authoritative enum resolved in docs/07 §3
+// (M5.3 pre-flight): algorithms | data-structures | system-design | database |
+// api-design | debugging | concurrency | behavioral. docs/05 §4 stores category
+// as a plain String; this enum is the validation-layer allowlist.
 const { z } = require('zod');
 
 // Canonical skillKey format (AGENTS.md rule 5): lowercase slug keys such as
@@ -33,7 +31,7 @@ const questionSchema = z.object({
   // trusted from client input, so M5.3 may reassign it before persisting.
   id: z.string().min(1),
   text: z.string().min(1, 'question text must be non-empty'),
-  category: z.string().min(1, 'category must be non-empty'), // enum TBD before M5.3
+  category: z.enum(['algorithms', 'data-structures', 'system-design', 'database', 'api-design', 'debugging', 'concurrency', 'behavioral']),
   difficulty: z.enum(['easy', 'medium', 'hard']),
   expectedTopics: z.array(expectedTopicSchema), // max 5 enforced in sanitize (docs/07 §3)
 });

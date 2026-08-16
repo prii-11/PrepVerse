@@ -88,14 +88,14 @@ const VALID_QUESTION = {
     {
       id: 'q1',
       text: 'What is a MongoDB index?',
-      category: 'databases',
+      category: 'database',
       difficulty: 'medium',
       expectedTopics: [{ skillKey: 'mongodb', topic: 'indexes' }],
     },
     {
       id: 'q2',
       text: 'Explain database transactions.',
-      category: 'databases',
+      category: 'system-design',
       difficulty: 'hard',
       expectedTopics: [{ skillKey: 'mongodb', topic: 'transactions' }],
     },
@@ -488,8 +488,8 @@ test('question generation schema: duplicate text rejected, difficulty enum enfor
   const badEnum = { questions: [VALID_QUESTION.questions[0], { ...VALID_QUESTION.questions[1], difficulty: 'impossible' }] };
   assert.equal(schema.safeParse(badEnum).success, false, 'unknown difficulty rejected');
 
-  const badCategory = { questions: [VALID_QUESTION.questions[0], { ...VALID_QUESTION.questions[1], category: '' }] };
-  assert.equal(schema.safeParse(badCategory).success, false, 'empty category rejected (non-empty string)');
+  const badCategory = { questions: [VALID_QUESTION.questions[0], { ...VALID_QUESTION.questions[1], category: 'databases' }] };
+  assert.equal(schema.safeParse(badCategory).success, false, 'category constrained to known enum values');
 });
 
 test('answer evaluation schema: uniqueness + non-empty-when-expectedTopics', () => {

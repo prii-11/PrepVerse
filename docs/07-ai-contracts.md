@@ -140,7 +140,7 @@ Return a JSON object with this exact shape: { schema }
 ```
 
 ### Validation rules
-- `questions.length === questionCount` exactly — if Gemini returns fewer, retry once with an explicit "you returned N, I need exactly {questionCount}" correction prompt; if still short, fail with `QUESTION_GENERATION_INCOMPLETE` rather than silently proceeding with fewer questions
+- `questions.length === questionCount` exactly — enforced directly by the Zod schema's `.length(questionCount)` constraint, so a short/long response fails ordinary schema validation and follows the standard correction-retry path (§5) like any other schema mismatch. **Resolved (M5.3 audit finding): the `QUESTION_GENERATION_INCOMPLETE` error code named here never existed in the orchestrator and was never wired up — removed as a distinct code.** A wrong question count surfaces as `SCHEMA_VALIDATION_FAILED` after the orchestrator's existing correction-retry/hard-failure path, same as any other invalid Gemini response — no separate error taxonomy needed for what's structurally just a schema mismatch.
 - No two questions have identical `text` (case-insensitive) — duplicate detection at the validation layer, not trusted to the prompt alone
 - `category` and `difficulty` are constrained to known enum values; anything else is rejected. **`category`'s enum (resolved — this was previously a normative claim with no defined set; the schema comment's three examples were illustrative only, not an allowlist, confirmed by an exhaustive search finding no other definition anywhere in `docs/`):** `algorithms | data-structures | system-design | database | api-design | debugging | concurrency | behavioral`. This is a proposed default set, not an empirically-derived one — same status as the readiness-formula weights and `MAX_EXPECTED_STDDEV`/`MAX_EXPECTED_SLOPE` — reasonable to revisit once real question-generation output exists to check it against, but not to be left undefined into M5.3.
 - `expectedTopics` entries must use canonical `skillKey` values from `RoleSkillCatalog`; `topic` is the human-readable subtopic label.
@@ -148,6 +148,7 @@ Return a JSON object with this exact shape: { schema }
 - `topicAssessments[].skillKey` values must be unique within one answer evaluation. A duplicate is a schema-validation failure; do not silently deduplicate.
 - If `question.expectedTopics` is non-empty, `topicAssessments` must be non-empty.
 - `addressed: false` is valid and contributes no skill evidence downstream.
+
 
 ### Duplicate prevention
 - Within a single generation call: explicit dedup check in validation (above)
