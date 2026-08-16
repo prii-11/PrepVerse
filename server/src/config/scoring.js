@@ -34,6 +34,24 @@ const SCORING_CONFIG = {
     consistency: 0.1,
     improvementTrend: 0.1,
   },
+
+  // M5.4 answer-evaluation weights (docs/07 §4, resolved MVP formulas) — used
+  // by the InterviewService report aggregation, never by the AI layer (the
+  // LLM is never asked for an overall score). Proposed defaults, tunable
+  // once real interview data exists — same status as the readiness weights.
+  EVALUATION_WEIGHTS: {
+    overall: { correctness: 0.5, technicalDepth: 0.3, communication: 0.2 },
+    technical: { correctness: 0.6, technicalDepth: 0.4 },
+  },
+
+  // M5.4 report aggregation caps (docs/02 §3): report.strengths / weaknesses /
+  // recommendations aggregate the COMPLETED answers' per-answer fields,
+  // case-insensitive dedup with first occurrence winning, max 5.
+  REPORT_CAPS: {
+    strengths: 5,
+    weaknesses: 5,
+    recommendations: 5,
+  },
 };
 
 module.exports = { SCORING_CONFIG };

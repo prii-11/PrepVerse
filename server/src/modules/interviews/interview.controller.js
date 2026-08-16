@@ -45,6 +45,14 @@ async function addAnswer(req, res, next) {
   }
 }
 
+async function submitInterview(req, res, next) {
+  try {
+    res.status(200).json(await interviewService.submitInterview(req.user.id, req.validatedParams.id));
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function cancelInterview(req, res, next) {
   try {
     res.status(200).json(await interviewService.cancelInterview(req.user.id, req.validatedParams.id));
@@ -61,4 +69,13 @@ async function getReport(req, res, next) {
   }
 }
 
-module.exports = { createInterview, listInterviews, getInterview, startInterview, addAnswer, cancelInterview, getReport };
+module.exports = {
+  createInterview,
+  listInterviews,
+  getInterview,
+  startInterview,
+  addAnswer,
+  submitInterview,
+  cancelInterview,
+  getReport,
+};
