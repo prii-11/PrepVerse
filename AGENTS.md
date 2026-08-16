@@ -11,7 +11,7 @@ Before writing or modifying any code in this repo, read `/docs/` in order:
 5. `docs/07-ai-contracts.md` — the three AI operations: prompts, schemas, validation, retry policy
 6. `docs/08-skill-evolution.md` — the skill-assessment algorithm (the core intelligence loop)
 
-**These documents are the source of truth.** The existing code under `client/` and `server/` is a partial, outdated prototype that predates this design — it does NOT define the target architecture. Where existing code conflicts with `/docs/`, the docs win. See `ROADMAP.md` for what's being kept vs. rewritten.
+**These documents are the source of truth.** `server/` is implemented against the design milestone-by-milestone (M2.1–M4.5 and M5.1–M5.3 CLOSED; see `ROADMAP.md`). `client/` is still the pre-design prototype — it does NOT define the target architecture and awaits frontend integration (M7). Where existing code conflicts with `/docs/`, the docs win. See `ROADMAP.md` for what's been completed.
 
 ## Non-negotiable rules (violating these breaks the architecture, not just style)
 
@@ -49,7 +49,7 @@ Each module: `controller → service → routes → validation`. Controllers are
 
 ## Current status
 
-See `ROADMAP.md` for what exists, what's being kept, and what's next. Don't assume the existing `client/`/`server/` code matches the design — check the roadmap's reuse/refactor/delete breakdown before touching a file.
+See `ROADMAP.md` for what exists and what's next. Backend milestones M2.1–M4.5 and M5.1–M5.3 are CLOSED; the current milestone is M5.4 (Answer Evaluation + topicAssessments). `client/` remains the pre-design prototype — don't assume it matches the design.
 
 
 ## Canonical design rule

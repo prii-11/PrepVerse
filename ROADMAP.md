@@ -1,8 +1,10 @@
 # ROADMAP.md
 
-Status: system design complete (`/docs/01` – `/docs/08`). This document maps the *existing* repo against that design and is the actual next step before implementation: architecture-to-code mapping and repo audit, not new design work.
+Status: system design complete (`/docs/01` – `/docs/08`). Server milestones `M2.1`–`M4.5` and `M5.1`–`M5.3` are implemented and CLOSED; the next milestone is `M5.4` (Answer Evaluation). This document maps the original prototype against that design as the historical implementation plan; the milestone table below (§ Build order) is the live status index.
 
 ## Server — `server/`
+
+> The verdicts below describe the original pre-milestone prototype and the work each file needed. **All of it has been executed** (M2.1–M5.3); rows marked *Build new* below now exist under `server/src/`. Kept as the historical mapping — the milestone table is the authoritative status index.
 
 | Existing file | Verdict | Notes |
 |---|---|---|
@@ -12,10 +14,10 @@ Status: system design complete (`/docs/01` – `/docs/08`). This document maps t
 | `controllers/authController.js` | **Refactor** | Signup/login logic (bcrypt hash, JWT sign) is sound and reusable as a starting point — but the current JWT strategy needs to match the final stateless-short-lived-JWT decision (`docs/06` §1.1), and needs to move into `modules/auth/` with a proper `auth.service.js` split (controller stays thin per `AGENTS.md`). |
 | `routes/authRoutes.js` | **Refactor** | Only 2 routes exist (`/signup`, `/login`). Needs `/logout`, `/me` added, and the whole thing versioned under `/api/v1/auth`. |
 | `middleware/authMiddleware.js` | **Rewrite** | Currently an empty placeholder — this is real, unimplemented work, not a refactor. Needs JWT verification + `req.user` population, used by every protected route. |
-| *(does not exist)* `modules/users/`, `modules/resumes/`, `modules/interviews/`, `modules/analytics/` | **Build new** | Nothing here today. Built from scratch per `docs/02` and `docs/05`. |
-| *(does not exist)* `ai/` (orchestrator, providers, resumeAnalyzer, questionGenerator, answerEvaluator, schemas) | **Build new** | The entire AI layer — the actual core of the product — doesn't exist in any form yet. This is the largest single piece of new work. |
-| *(does not exist)* `RoleSkillCatalog` seed data | **Build new** | Needs a small seed script populating a handful of roles (`docs/05` §5). |
-| *(does not exist)* `middleware/rateLimit.js`, `middleware/upload.js`, `middleware/error.js` | **Build new** | Rate limiting (two-tier per `docs/06` §0.1), file upload validation, and the consistent error-shape middleware are all new. |
+| *(does not exist)* `modules/users/`, `modules/resumes/`, `modules/interviews/`, `modules/analytics/` | **Implemented** | All five modules exist now: `server/src/modules/{auth,users,resumes,interviews,analytics}/` (M2.1–M5.3). |
+| *(does not exist)* `ai/` (orchestrator, providers, resumeAnalyzer, questionGenerator, answerEvaluator, schemas) | **Implemented** | `orchestrator.js`, `providers/gemini.js`, `resumeAnalyzer.js`, `questionGenerator.js`, `schemas/` all exist (M5.1–M5.3); `answerEvaluator.js` is the remaining M5.4 deliverable. |
+| *(does not exist)* `RoleSkillCatalog` seed data | **Implemented** | `server/scripts/seedRoleSkillCatalog.js` (M2.3). |
+| *(does not exist)* `middleware/rateLimit.js`, `middleware/upload.js`, `middleware/error.js` | **Implemented** | `server/src/middleware/{auth,error,rateLimit,validate,upload}.js` all exist (M2.1–M3). |
 
 ## Client — `client/`
 
@@ -50,13 +52,13 @@ Each milestone follows: MASTER PROMPT → OpenCode implements → CHECK PROMPT (
 
 | Milestone | Scope | Status |
 |---|---|---|
-|  M2.1 | Backend infrastructure (folders, config, app/server split, error middleware, rate limiting) — **no auth/AI/storage logic** | NOT STARTED — corrected master prompt ready |
-| M2.2 | Error handling + validation foundation | NOT STARTED |
-| M2.3 | Database models + indexes (full Mongoose schemas per docs/05) | NOT STARTED |
-| M3 | Auth: stateless short-lived JWT only — signup → login → middleware → /me → logout. **No RefreshToken collection, no refresh cookie, no rotation** (docs/06 §1.1, final) | NOT STARTED |
-| M4 | Core domain APIs: onboarding, resume metadata, interviews, reports — real contracts, no AI yet | NOT STARTED |
-| M4.5 | Skill engine: RoleSkillCatalog seed + SkillProfileService, deterministic and unit-tested with zero Gemini dependency (docs/08) | NOT STARTED |
-| M5 | AI: Gemini adapter, AI Orchestrator, Resume Analysis, Question Generation, Answer Evaluation + topicAssessments, AIExecution logging | NOT STARTED |
+|  M2.1 | Backend infrastructure (folders, config, app/server split, error middleware, rate limiting) — **no auth/AI/storage logic** | CLOSED |
+| M2.2 | Error handling + validation foundation | CLOSED |
+| M2.3 | Database models + indexes (full Mongoose schemas per docs/05) | CLOSED |
+| M3 | Auth: stateless short-lived JWT only — signup → login → middleware → /me → logout. **No RefreshToken collection, no refresh cookie, no rotation** (docs/06 §1.1, final) | CLOSED |
+| M4 | Core domain APIs: onboarding, resume metadata, interviews, reports — real contracts, no AI yet | CLOSED (implemented as M4.1–M4.4) |
+| M4.5 | Skill engine: RoleSkillCatalog seed + SkillProfileService, deterministic and unit-tested with zero Gemini dependency (docs/08) | CLOSED |
+| M5 | AI: Gemini adapter, AI Orchestrator, Resume Analysis, Question Generation, Answer Evaluation + topicAssessments, AIExecution logging | M5.1–M5.3 CLOSED (adapter, orchestrator, resume analysis, question generation, AIExecution). Remaining: M5.4 (Answer Evaluation + topicAssessments) NOT STARTED; M5.5 (skill evolution) NOT STARTED |
 | M6 | Storage: Supabase Storage, resume upload/download, signed URLs | NOT STARTED |
 | M7 | Frontend integration: replace every mock service with real API calls, page by page | NOT STARTED |
 | M8 | Hardening: rate limits, validation, security review, concurrency, tests, deployment | NOT STARTED |
