@@ -1,6 +1,6 @@
 # ROADMAP.md
 
-Status: system design complete (`/docs/01` – `/docs/08`). Server milestones `M2.1`–`M4.5` and `M5.1`–`M5.3` are implemented and CLOSED; the next milestone is `M5.4` (Answer Evaluation). This document maps the original prototype against that design as the historical implementation plan; the milestone table below (§ Build order) is the live status index.
+Status: system design complete (`/docs/01` – `/docs/08`). Server milestones `M2.1`–`M4.5` and `M5.1`–`M5.4` are implemented and CLOSED; the next milestone is `M5.5` (Skill Evolution). This document maps the original prototype against that design as the historical implementation plan; the milestone table below (§ Build order) is the live status index.
 
 ## Server — `server/`
 
@@ -15,7 +15,7 @@ Status: system design complete (`/docs/01` – `/docs/08`). Server milestones `M
 | `routes/authRoutes.js` | **Refactor** | Only 2 routes exist (`/signup`, `/login`). Needs `/logout`, `/me` added, and the whole thing versioned under `/api/v1/auth`. |
 | `middleware/authMiddleware.js` | **Rewrite** | Currently an empty placeholder — this is real, unimplemented work, not a refactor. Needs JWT verification + `req.user` population, used by every protected route. |
 | *(does not exist)* `modules/users/`, `modules/resumes/`, `modules/interviews/`, `modules/analytics/` | **Implemented** | All five modules exist now: `server/src/modules/{auth,users,resumes,interviews,analytics}/` (M2.1–M5.3). |
-| *(does not exist)* `ai/` (orchestrator, providers, resumeAnalyzer, questionGenerator, answerEvaluator, schemas) | **Implemented** | `orchestrator.js`, `providers/gemini.js`, `resumeAnalyzer.js`, `questionGenerator.js`, `schemas/` all exist (M5.1–M5.3); `answerEvaluator.js` is the remaining M5.4 deliverable. |
+| *(does not exist)* `ai/` (orchestrator, providers, resumeAnalyzer, questionGenerator, answerEvaluator, schemas) | **Implemented** | `orchestrator.js`, `providers/gemini.js`, `resumeAnalyzer.js`, `questionGenerator.js`, `answerEvaluator.js`, `schemas/` all exist (M5.1–M5.4). |
 | *(does not exist)* `RoleSkillCatalog` seed data | **Implemented** | `server/scripts/seedRoleSkillCatalog.js` (M2.3). |
 | *(does not exist)* `middleware/rateLimit.js`, `middleware/upload.js`, `middleware/error.js` | **Implemented** | `server/src/middleware/{auth,error,rateLimit,validate,upload}.js` all exist (M2.1–M3). |
 
@@ -58,7 +58,7 @@ Each milestone follows: MASTER PROMPT → OpenCode implements → CHECK PROMPT (
 | M3 | Auth: stateless short-lived JWT only — signup → login → middleware → /me → logout. **No RefreshToken collection, no refresh cookie, no rotation** (docs/06 §1.1, final) | CLOSED |
 | M4 | Core domain APIs: onboarding, resume metadata, interviews, reports — real contracts, no AI yet | CLOSED (implemented as M4.1–M4.4) |
 | M4.5 | Skill engine: RoleSkillCatalog seed + SkillProfileService, deterministic and unit-tested with zero Gemini dependency (docs/08) | CLOSED |
-| M5 | AI: Gemini adapter, AI Orchestrator, Resume Analysis, Question Generation, Answer Evaluation + topicAssessments, AIExecution logging | M5.1–M5.3 CLOSED (adapter, orchestrator, resume analysis, question generation, AIExecution). Remaining: M5.4 (Answer Evaluation + topicAssessments) NOT STARTED; M5.5 (skill evolution) NOT STARTED |
+| M5 | AI: Gemini adapter, AI Orchestrator, Resume Analysis, Question Generation, Answer Evaluation + topicAssessments, AIExecution logging | M5.1–M5.4 CLOSED (adapter, orchestrator, resume analysis, question generation, answer evaluation + topicAssessments + submission, AIExecution). Remaining: M5.5 (skill evolution) NOT STARTED |
 | M6 | Storage: Supabase Storage, resume upload/download, signed URLs | NOT STARTED |
 | M7 | Frontend integration: replace every mock service with real API calls, page by page | NOT STARTED |
 | M8 | Hardening: rate limits, validation, security review, concurrency, tests, deployment | NOT STARTED |
