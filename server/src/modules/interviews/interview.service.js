@@ -1,7 +1,11 @@
 // InterviewService — business/application layer for the interviews module.
 // M4.3: lifecycle endpoints (list, detail, start, answers, cancel, report).
+// M5.3: creation (createInterview) — the create → generate → persist sequence.
 //
-// Owned model (docs/05 §4): Interview — the only model this service may touch.
+// Owned model (docs/05 §4): Interview — the only model this service may write
+// to. Read-only dependencies: RoleSkillCatalog (via roleSkillCatalog.service —
+// exact-match targetRole, docs/05 §5) and User (currentSkillProfile for the
+// QuestionGenerator input, docs/05 §7).
 // Ownership (docs/06 §2): every by-id lookup is findOne({ _id, userId }) —
 // "not found" and "not yours" are the same 404, never a 403.
 // start/cancel are ATOMIC: the status precondition lives in the query itself
@@ -9,12 +13,123 @@
 // same transition twice. A follow-up exists() read happens ONLY to classify a
 // null result as 404 (not owned / missing) vs 409 (owned but wrong state).
 const Interview = require('./interview.model');
-const { NotFoundError, ConflictError } = require('../../utils/errors');
+const User = require('../users/user.model');
+const roleSkillCatalogService = require('../analytics/roleSkillCatalog.service');
+const questionGenerator = require('../../ai/questionGenerator');
+const { NotFoundError, ConflictError, ValidationError, AIProviderError } = require('../../utils/errors');
 
 async function assertOwned(userId, id) {
   const owned = await Interview.exists({ _id: id, userId });
   if (!owned) {
     throw new NotFoundError('Interview not found');
+  }
+}
+
+// M5.3 creation sequence (docs/02 §3, docs/07 §3; resolved contract §0.5):
+// catalog-exact targetRole → create Interview (CREATED/PENDING) → generate via
+// QuestionGenerator → ONE atomic update on success (questions + COMPLETED) or
+// ONE atomic update on failure (FAILED + failureReason). No transaction (the
+// Gemini call cannot be inside one), no idempotency (plain REST creation), no
+// no retry endpoint (FAILED is terminal; recovery = cancel + recreate).
+async function createInterview(userId, { targetRole, difficulty, questionCount }) {
+  // Exact-match catalog validation (docs/05 §5): unknown role → the request
+  // body contains a bad field value → ValidationError, the only non-invented
+  // classification in the existing taxonomy.
+  const role = await roleSkillCatalogService.findByRole(targetRole);
+  if (!role) {
+    throw new ValidationError(`targetRole '${targetRole}' is not in the RoleSkillCatalog`);
+  }
+
+  const user = await User.findById(userId);
+  if (!user) {
+    throw new NotFoundError('User not found');
+  }
+
+  // questionCount: optional in the request, MVP default 4, range 3-5 enforced
+  // at validation (docs/07 §3).
+  const count = questionCount ?? 4;
+
+  // Interview exists before the AI call — always CREATED, never advanced by
+  // question generation success or failure (independent state trees).
+  const interview = await Interview.create({
+    userId,
+    targetRole,
+    difficulty,
+    status: 'CREATED',
+    questionGeneration: { status: 'PENDING' },
+  });
+
+  // QuestionGenerator input sourcing: currentSkillProfile from the user's own
+  // document (docs/05 §7 flow), previousWeaknesses from past COMPLETED
+  // interview reports (empty array when none exist — the common case, since
+  // no evaluation flow exists yet).
+  const currentSkillProfile = user.currentSkillProfile ?? {};
+  const previousWeaknesses = await Interview.find(
+    { userId, status: 'COMPLETED', 'report.weaknesses': { $exists: true, $ne: [] } },
+    { 'report.weaknesses': 1 }
+  ).then((completed) => completed.flatMap((entry) => entry.report?.weaknesses ?? []));
+
+  try {
+    const { questions, promptVersion, model } = await questionGenerator.generateQuestions({
+      targetRole,
+      difficulty,
+      questionCount: count,
+      currentSkillProfile: {
+        skills: currentSkillProfile.skills ?? [],
+        skillGaps: currentSkillProfile.skillGaps ?? [],
+      },
+      previousWeaknesses,
+      userId,
+      interviewId: interview._id,
+    });
+
+    // SUCCESS — ONE atomic update (resolved §0.5.3): questions[] +
+    // questionGeneration.{status, promptVersion, model} in a single
+    // findOneAndUpdate so a crash cannot leave questions persisted with the
+    // status still PENDING. Gemini's string `id` is explicitly discarded here
+    // (resolved §0.5.7): Mongoose's auto ObjectId `_id` owns question identity.
+    const persisted = await Interview.findOneAndUpdate(
+      { _id: interview._id },
+      {
+        $set: {
+          questions: questions.map(({ id, ...question }) => question),
+          'questionGeneration.status': 'COMPLETED',
+          'questionGeneration.promptVersion': promptVersion,
+          'questionGeneration.model': model,
+        },
+      },
+      { new: true }
+    );
+
+    if (!persisted) {
+      throw new NotFoundError('Interview not found');
+    }
+
+    const detail = persisted.toObject({ versionKey: false });
+    delete detail.userId;
+    return detail;
+  } catch (error) {
+    // FAILURE — ONE atomic update (resolved §0.5.3). failureReason is the
+    // error CODE (details.failure from the orchestrator's AIProviderError,
+    // e.g. SCHEMA_VALIDATION_FAILED / RATE_LIMITED / AI_PROVIDER_FAILED),
+    // never raw model output (docs/05 §4). A failing FAILED-write must not
+    // mask the original error — logged, then rethrow always.
+    const failureReason =
+      error instanceof AIProviderError && error.details?.failure ? error.details.failure : error.code || 'AI_PROVIDER_FAILED';
+    try {
+      await Interview.findOneAndUpdate(
+        { _id: interview._id },
+        {
+          $set: {
+            'questionGeneration.status': 'FAILED',
+            'questionGeneration.failureReason': failureReason,
+          },
+        }
+      );
+    } catch (updateError) {
+      console.error(`[interview] failed to persist questionGeneration FAILED state: ${updateError.message}`);
+    }
+    throw error;
   }
 }
 
@@ -119,4 +234,12 @@ async function getReport(userId, id) {
   return interview.report.toObject();
 }
 
-module.exports = { listInterviews, getInterview, startInterview, addAnswer, cancelInterview, getReport };
+module.exports = {
+  createInterview,
+  listInterviews,
+  getInterview,
+  startInterview,
+  addAnswer,
+  cancelInterview,
+  getReport,
+};

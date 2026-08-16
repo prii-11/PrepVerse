@@ -28,7 +28,13 @@ const { resumeAnalysisSchema, sanitizeResumeAnalysis } = require('../src/ai/sche
 const { createQuestionGenerationSchema, sanitizeQuestionGeneration } = require('../src/ai/schemas/questionGeneration.schema');
 const { createAnswerEvaluationSchema, sanitizeAnswerEvaluation } = require('../src/ai/schemas/answerEvaluation.schema');
 const resumeAnalyzer = require('../src/ai/resumeAnalyzer');
+const questionGenerator = require('../src/ai/questionGenerator');
 const { ResumeTextExtractionError } = require('../src/utils/errors');
+const interviewService = require('../src/modules/interviews/interview.service');
+const Interview = require('../src/modules/interviews/interview.model');
+const User = require('../src/modules/users/user.model');
+const RoleSkillCatalog = require('../src/modules/analytics/roleSkillCatalog.model');
+const { createInterviewBodySchema } = require('../src/modules/interviews/interview.validation');
 
 let mongoServer;
 const realGenerate = geminiProvider.generate;
@@ -784,4 +790,397 @@ test('M5.2-11. working tree clean except for M5.2 changes', async () => {
   // Only new/changed files for M5.2: resumeAnalyzer.js, errors.js, test file
   const m52Files = lines.filter(l => l.includes('resumeAnalyzer') || l.includes('errors.js') || l.includes('m5.1-ai-infra.test.js'));
   assert.equal(lines.length, m52Files.length, `unexpected changes: ${status}`);
+});
+
+// -----------------------------------------------------------------------------
+// M5.3 — QuestionGenerator + interview creation
+// -----------------------------------------------------------------------------
+
+// Fixtures: one catalog role, one user with a currentSkillProfile, one past
+// COMPLETED interview carrying report.weaknesses (for previousWeaknesses).
+const M53_CATALOG_ROLE = {
+  role: 'Backend Developer',
+  requiredSkills: [
+    { skillKey: 'javascript', weight: 1.0, minimumLevel: 'INTERMEDIATE' },
+    { skillKey: 'nodejs', weight: 0.9, minimumLevel: 'INTERMEDIATE' },
+  ],
+};
+
+const M53_USER = {
+  email: 'm53-user@test.dev',
+  passwordHash: 'hash',
+  firstName: 'M53',
+  lastName: 'User',
+  currentSkillProfile: {
+    skills: [
+      { skillKey: 'javascript', sources: ['RESUME'], assessed: false, level: null },
+    ],
+    skillGaps: ['kubernetes'],
+  },
+};
+
+const M53_4_QUESTIONS = {
+  questions: [
+    {
+      id: 'g1',
+      text: 'Explain how a MongoDB index works.',
+      category: 'database',
+      difficulty: 'medium',
+      expectedTopics: [{ skillKey: 'mongodb', topic: 'indexes' }],
+    },
+    {
+      id: 'g2',
+      text: 'Design a rate limiter for a public API.',
+      category: 'system-design',
+      difficulty: 'hard',
+      expectedTopics: [{ skillKey: 'rest-apis', topic: 'rate limiting' }],
+    },
+    {
+      id: 'g3',
+      text: 'What is the CAP theorem, in one sentence?',
+      category: 'database',
+      difficulty: 'easy',
+      expectedTopics: [{ skillKey: 'nosql', topic: 'cap theorem' }],
+    },
+    {
+      id: 'g4',
+      text: 'Debug an infinite loop in a JS event loop task.',
+      category: 'debugging',
+      difficulty: 'medium',
+      expectedTopics: [{ skillKey: 'javascript', topic: 'event loop' }],
+    },
+  ],
+};
+
+async function m53Seed() {
+  await User.deleteMany({ email: M53_USER.email });
+  await RoleSkillCatalog.deleteMany({ role: M53_CATALOG_ROLE.role });
+  await RoleSkillCatalog.create(M53_CATALOG_ROLE);
+  const user = await User.create(M53_USER);
+  const earlier = await Interview.create({
+    userId: user._id,
+    targetRole: 'Backend Developer',
+    difficulty: 'medium',
+    status: 'COMPLETED',
+    report: { overallScore: 70, weaknesses: ['kubernetes'], profileSyncStatus: 'COMPLETED' },
+  });
+  assert.ok(earlier._id, 'past COMPLETED interview seeded');
+  return user;
+}
+
+// Counts Interview.findOneAndUpdate calls so atomicity is asserted numerically
+// (check prompt #6) — the success and failure paths must each perform exactly
+// one persistence write for questions + questionGeneration together.
+async function withFindOneAndUpdateCounter(fn) {
+  const original = Interview.findOneAndUpdate;
+  const counter = { calls: 0 };
+  Interview.findOneAndUpdate = function count(...args) {
+    counter.calls += 1;
+    return original.apply(this, args);
+  };
+  try {
+    const result = await fn();
+    return { counter, result };
+  } finally {
+    Interview.findOneAndUpdate = original;
+  }
+}
+
+test('M5.3-1. questionGenerator wraps QUESTION_GENERATION, threads entityId, builds the docs/07 prompt', async () => {
+  const user = await m53Seed();
+  mock.enqueue(successItem(JSON.stringify(M53_4_QUESTIONS)));
+
+  const { questions, promptVersion, model } = await questionGenerator.generateQuestions({
+    targetRole: 'Backend Developer',
+    difficulty: 'medium',
+    questionCount: 4,
+    currentSkillProfile: { skills: [{ skillKey: 'javascript', sources: ['RESUME'], assessed: false, level: null }], skillGaps: ['kubernetes'] },
+    previousWeaknesses: ['kubernetes'],
+    userId: user._id.toString(),
+    interviewId: new mongoose.Types.ObjectId(),
+  });
+
+  assert.equal(questions.length, 4);
+  assert.equal(promptVersion, 'question-generation-v1');
+  assert.equal(model, AI_CONFIG.model);
+
+  const prompt = mock.calls[0].prompt;
+  assert.ok(prompt.includes('You generate technical interview questions for a candidate preparing for Backend Developer at medium difficulty'), 'system instruction filled verbatim');
+  assert.ok(prompt.includes('Target role: Backend Developer'));
+  assert.ok(prompt.includes('Difficulty: medium'));
+  assert.ok(prompt.includes('Candidate skills:'));
+  assert.ok(prompt.includes('"skillKey":"javascript"'));
+  assert.ok(prompt.includes('Candidate skill gaps:'));
+  assert.ok(prompt.includes('"kubernetes"'));
+  assert.ok(prompt.includes('Previous weak areas: ["kubernetes"]'));
+  assert.ok(prompt.includes('Number of questions: 4'));
+  assert.ok(prompt.includes('Return a JSON object with this exact shape: { schema }'));
+});
+
+test('M5.3-2. successful creation: CREATED + COMPLETED, server _ids, provenance, ONE atomic update', async () => {
+  const user = await m53Seed();
+  mock.enqueue(successItem(JSON.stringify(M53_4_QUESTIONS)));
+
+  const { counter, result } = await withFindOneAndUpdateCounter(() =>
+    interviewService.createInterview(user._id.toString(), {
+      targetRole: 'Backend Developer',
+      difficulty: 'medium',
+    })
+  );
+
+  assert.equal(counter.calls, 1, 'success path = exactly ONE findOneAndUpdate (questions + COMPLETED together)');
+  assert.equal(result.status, 'CREATED', 'Interview.status stays CREATED');
+  assert.equal(result.questionGeneration.status, 'COMPLETED');
+  assert.equal(result.questionGeneration.promptVersion, 'question-generation-v1');
+  assert.equal(result.questionGeneration.model, AI_CONFIG.model);
+  assert.equal(result.questions.length, 4);
+  assert.equal(result.userId, undefined, 'userId not exposed in the response');
+
+  for (const question of result.questions) {
+    assert.ok(mongoose.Types.ObjectId.isValid(question._id), `server-generated _id: ${question._id}`);
+    assert.ok(
+      question._id.toString() !== 'g1' && question._id.toString() !== 'g2' &&
+      question._id.toString() !== 'g3' && question._id.toString() !== 'g4',
+      'Gemini string id must NOT be the persisted identity'
+    );
+  }
+
+  const persisted = await Interview.findById(result._id);
+  const stored = persisted.toObject({ versionKey: false });
+  for (const question of stored.questions) {
+    assert.equal(Object.prototype.hasOwnProperty.call(question, 'id'), false, 'Gemini id field explicitly discarded on persist');
+  }
+  assert.equal(stored.userId.toString(), user._id.toString(), 'userId from authenticated identity');
+});
+
+test('M5.3-3. unknown targetRole → ValidationError, nothing persisted, no AI call', async () => {
+  const user = await m53Seed();
+  const before = await Interview.countDocuments({});
+
+  await assert.rejects(
+    interviewService.createInterview(user._id.toString(), { targetRole: 'Not A Real Role', difficulty: 'medium' }),
+    (err) => err.code === 'VALIDATION_ERROR'
+  );
+
+  assert.equal(mock.calls.length, 0, 'no Gemini call for an unknown role');
+  assert.equal(await Interview.countDocuments({}), before, 'no interview created');
+});
+
+test('M5.3-4. questionCount bounds: 2 and 6 rejected, default 4 generated', async () => {
+  const user = await m53Seed();
+
+  assert.equal(createInterviewBodySchema.safeParse({ targetRole: 'x', difficulty: 'easy', questionCount: 2 }).success, false, 'questionCount 2 rejected');
+  assert.equal(createInterviewBodySchema.safeParse({ targetRole: 'x', difficulty: 'easy', questionCount: 6 }).success, false, 'questionCount 6 rejected');
+  assert.equal(createInterviewBodySchema.safeParse({ targetRole: 'x', difficulty: 'easy', questionCount: 4 }).success, true, 'questionCount 4 accepted');
+  const noCount = createInterviewBodySchema.safeParse({ targetRole: 'x', difficulty: 'easy' });
+  assert.equal(noCount.success, true, 'no questionCount accepted (optional)');
+  assert.equal(noCount.data.questionCount, undefined, 'default applied in the service, not validation');
+
+  mock.enqueue(successItem(JSON.stringify(M53_4_QUESTIONS)));
+  const result = await interviewService.createInterview(user._id.toString(), {
+    targetRole: 'Backend Developer',
+    difficulty: 'medium',
+  });
+  assert.equal(result.questions.length, 4, 'default questionCount = 4');
+});
+
+test('M5.3-5. AI failure after exhausted retries: FAILED + failureReason, Interview stays CREATED, questions empty', async () => {
+  const user = await m53Seed();
+  mock.enqueue(retryableItem(), retryableItem(), retryableItem());
+
+  await assert.rejects(
+    interviewService.createInterview(user._id.toString(), { targetRole: 'Backend Developer', difficulty: 'medium' }),
+    (err) => err.code === 'AI_PROVIDER_FAILED' && err.details?.failure === 'RATE_LIMITED'
+  );
+
+  const stored = await Interview.findOne({ userId: user._id, status: 'CREATED' });
+  assert.ok(stored, 'interview exists');
+  assert.equal(stored.questionGeneration.status, 'FAILED');
+  assert.equal(stored.questionGeneration.failureReason, 'RATE_LIMITED');
+  assert.deepEqual(stored.questions, [], 'no questions persisted on failure');
+});
+
+test('M5.3-6. failure path performs exactly ONE atomic update (FAILED + failureReason)', async () => {
+  const user = await m53Seed();
+  mock.enqueue(retryableItem(), retryableItem(), retryableItem());
+
+  const { counter } = await withFindOneAndUpdateCounter(async () => {
+    await assert.rejects(
+      interviewService.createInterview(user._id.toString(), { targetRole: 'Backend Developer', difficulty: 'medium' }),
+      (err) => err.code === 'AI_PROVIDER_FAILED'
+    );
+  });
+
+  assert.equal(counter.calls, 1, 'failure path = exactly ONE findOneAndUpdate (FAILED + failureReason together)');
+});
+
+test('M5.3-7. AIExecution attribution: entityId = Interview._id, entityType INTERVIEW, operation QUESTION_GENERATION', async () => {
+  const user = await m53Seed();
+  mock.enqueue(successItem(JSON.stringify(M53_4_QUESTIONS)));
+
+  const result = await interviewService.createInterview(user._id.toString(), {
+    targetRole: 'Backend Developer',
+    difficulty: 'medium',
+  });
+
+  const execution = await AIExecution.findOne({ operation: 'QUESTION_GENERATION', entityId: result._id });
+  assert.ok(execution, 'AIExecution record exists for this interview');
+  assert.equal(execution.status, 'SUCCESS');
+  assert.equal(execution.entityType, 'INTERVIEW');
+  assert.equal(execution.userId.toString(), user._id.toString());
+  assert.equal(execution.promptVersion, 'question-generation-v1');
+  assert.equal(execution.model, AI_CONFIG.model);
+  assert.equal(execution.errorCode, undefined, 'no errorCode on SUCCESS');
+  assert.equal(execution.outputSummary.questionCount, 4);
+});
+
+test('M5.3-8. no idempotency: two identical POSTs create two separate documents', async () => {
+  const user = await m53Seed();
+  mock.enqueue(successItem(JSON.stringify(M53_4_QUESTIONS)));
+  mock.enqueue(successItem(JSON.stringify(M53_4_QUESTIONS)));
+
+  const first = await interviewService.createInterview(user._id.toString(), { targetRole: 'Backend Developer', difficulty: 'medium' });
+  const second = await interviewService.createInterview(user._id.toString(), { targetRole: 'Backend Developer', difficulty: 'medium' });
+
+  assert.notEqual(first._id.toString(), second._id.toString(), 'two distinct interviews');
+  await Interview.findByIdAndDelete(first._id);
+});
+
+test('M5.3-9. ownership: userId only from authenticated identity, never from the body', async () => {
+  const user = await m53Seed();
+
+  const parsed = createInterviewBodySchema.safeParse({
+    targetRole: 'Backend Developer',
+    difficulty: 'medium',
+    userId: new mongoose.Types.ObjectId().toString(),
+  });
+  assert.equal(parsed.success, true);
+  assert.equal(parsed.data.userId, undefined, 'client-provided userId is stripped by validation');
+
+  mock.enqueue(successItem(JSON.stringify(M53_4_QUESTIONS)));
+  const result = await interviewService.createInterview(user._id.toString(), { targetRole: 'Backend Developer', difficulty: 'medium' });
+  const stored = await Interview.findById(result._id);
+  assert.equal(stored.userId.toString(), user._id.toString(), 'Interview.userId = authenticated user');
+});
+
+test('M5.3-10. M4.3 end-to-end against a fresh M5.3-created interview: list/get/start/answers/cancel', async () => {
+  const user = await m53Seed();
+  mock.enqueue(successItem(JSON.stringify(M53_4_QUESTIONS)));
+
+  const created = await interviewService.createInterview(user._id.toString(), {
+    targetRole: 'Backend Developer',
+    difficulty: 'medium',
+  });
+
+  const inList = await interviewService.listInterviews(user._id.toString());
+  assert.ok(inList.some((item) => item._id.toString() === created._id.toString()), 'created interview appears in the list');
+
+  const detail = await interviewService.getInterview(user._id.toString(), created._id.toString());
+  assert.equal(detail.status, 'CREATED');
+  assert.equal(detail.questions.length, 4);
+
+  const started = await interviewService.startInterview(user._id.toString(), created._id.toString());
+  assert.equal(started.status, 'IN_PROGRESS');
+
+  const questionId = detail.questions[0]._id.toString();
+  const answer = await interviewService.addAnswer(user._id.toString(), created._id.toString(), {
+    questionId,
+    text: 'An index is a sorted data structure the engine uses for fast lookups.',
+  });
+  assert.equal(answer.evaluationStatus, 'PENDING');
+  assert.equal(answer.questionId.toString(), questionId, 'answer references the persisted server-generated question _id');
+
+  const cancelled = await interviewService.cancelInterview(user._id.toString(), created._id.toString());
+  assert.equal(cancelled.status, 'CANCELLED');
+
+  await assert.rejects(
+    interviewService.getReport(user._id.toString(), created._id.toString()),
+    (err) => err.code === 'NOT_FOUND',
+    'no report before evaluation (M4.3 behavior unchanged)'
+  );
+});
+
+test('M5.3-11. forbidden technology: none in questionGenerator.js or the M5.3 diff', async () => {
+  const { execSync } = require('node:child_process');
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  const forbidden = ['AnswerEvaluator', 'SkillProfileService', 'supabase', 'regenerate', 'submit'];
+  const content = fs.readFileSync(path.join(__dirname, '..', 'src', 'ai', 'questionGenerator.js'), 'utf8');
+  for (const term of forbidden) {
+    assert.ok(!content.toLowerCase().includes(term.toLowerCase()), `questionGenerator.js must not reference: ${term}`);
+  }
+
+  const diff = execSync('git diff HEAD~1 -- server/src docs/02-architecture-api.md docs/05-database-schema.md docs/07-ai-contracts.md', {
+    encoding: 'utf8',
+    cwd: path.join(__dirname, '..'),
+  });
+  for (const term of forbidden) {
+    assert.ok(!diff.toLowerCase().includes(term.toLowerCase()), `M5.3 diff must not contain: ${term}`);
+  }
+});
+
+test('M5.3-12. protected files unchanged and M4.3 methods intact (git diff HEAD~1)', async () => {
+  const { execSync } = require('node:child_process');
+  const protectedPaths = [
+    'server/src/modules/auth',
+    'server/src/modules/users',
+    'server/src/modules/resumes',
+    'server/src/utils/jwt.js',
+    'server/src/config/scoring.js',
+    'server/src/ai/orchestrator.js',
+    'server/src/ai/providers/gemini.js',
+    'server/src/ai/schemas',
+    'server/src/ai/resumeAnalyzer.js',
+  ];
+  for (const file of protectedPaths) {
+    const diff = execSync(`git diff HEAD~1 -- ${file}`, { encoding: 'utf8', cwd: require('node:path').join(__dirname, '..') });
+    assert.equal(diff.trim(), '', `protected file must not be modified: ${file}`);
+  }
+  // No M4.3 method signature removed or altered (only additions allowed).
+  for (const file of [
+    'server/src/modules/interviews/interview.service.js',
+    'server/src/modules/interviews/interview.controller.js',
+    'server/src/modules/interviews/interview.routes.js',
+  ]) {
+    const removed = execSync(`git diff HEAD~1 -- ${file} | grep -E "^-.*(async )?function" || true`, {
+      encoding: 'utf8',
+      cwd: require('node:path').join(__dirname, '..'),
+    });
+    assert.equal(removed.trim(), '', `no M4.3 method may be removed or altered: ${file}`);
+  }
+});
+
+test('M5.3-13. docs/02 POST /interviews row documents optional questionCount', async () => {
+  const fs = require('node:fs');
+  const content = fs.readFileSync(require('node:path').join(__dirname, '..', '..', 'docs', '02-architecture-api.md'), 'utf8');
+  const row = content.split('\n').find((line) => line.includes('POST | /api/v1/interviews |'));
+  assert.ok(row, 'POST /interviews row exists');
+  assert.ok(row.includes('questionCount'), 'row documents questionCount');
+  assert.ok(row.includes('default 4'), 'row documents the default');
+});
+
+test('M5.3-14. QuestionGenerator has no persistence, no HTTP, no direct provider use', async () => {
+  const fs = require('node:fs');
+  const content = fs.readFileSync(require('node:path').join(__dirname, '..', 'src', 'ai', 'questionGenerator.js'), 'utf8');
+  const forbiddenRequires = [
+    "require('mongodb')",
+    "require('mongoose')",
+    "require('http')",
+    "require('./providers",
+    "require('../modules",
+  ];
+  for (const term of forbiddenRequires) {
+    assert.ok(!content.includes(term), `questionGenerator.js must not import: ${term}`);
+  }
+  assert.ok(content.includes("require('./orchestrator')"));
+  assert.ok(content.includes("orchestrator.run('QUESTION_GENERATION'"));
+});
+
+test('M5.3-15. git state: clean tree, M5.3 commit at HEAD', async () => {
+  const { execSync } = require('node:child_process');
+  const status = execSync('git status --short', { encoding: 'utf8', cwd: require('node:path').join(__dirname, '..') });
+  assert.equal(status.trim(), '', `working tree must be clean: ${status}`);
+  const head = execSync('git log --oneline -1', { encoding: 'utf8', cwd: require('node:path').join(__dirname, '..') }).trim();
+  assert.ok(head.includes('feat: implement QuestionGenerator and interview creation (M5.3)'), `HEAD must be the M5.3 commit: ${head}`);
 });

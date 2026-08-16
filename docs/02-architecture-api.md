@@ -180,7 +180,7 @@ Layering per request (see §2.2 for the full, authoritative pipeline): `IP Rate 
 ### Interviews
 | Method | Path | Notes |
 |---|---|---|
-| POST | /api/v1/interviews | { targetRole, difficulty } → status: CREATED, questions generated |
+| POST | /api/v1/interviews | { targetRole, difficulty, questionCount? } → status: CREATED, questions generated (questionCount optional, default 4, range 3–5 per docs/07 §3) |
 | GET | /api/v1/interviews | list, filterable by status |
 | GET | /api/v1/interviews/:id | full interview incl. questions |
 | POST | /api/v1/interviews/:id/start | status → IN_PROGRESS |

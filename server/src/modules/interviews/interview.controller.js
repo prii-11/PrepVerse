@@ -5,6 +5,14 @@
 // state transitions, no model access, no AI behavior.
 const interviewService = require('./interview.service');
 
+async function createInterview(req, res, next) {
+  try {
+    res.status(201).json(await interviewService.createInterview(req.user.id, req.validatedBody));
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function listInterviews(req, res, next) {
   try {
     res.status(200).json(await interviewService.listInterviews(req.user.id));
@@ -53,4 +61,4 @@ async function getReport(req, res, next) {
   }
 }
 
-module.exports = { listInterviews, getInterview, startInterview, addAnswer, cancelInterview, getReport };
+module.exports = { createInterview, listInterviews, getInterview, startInterview, addAnswer, cancelInterview, getReport };
