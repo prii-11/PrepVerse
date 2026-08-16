@@ -1177,10 +1177,16 @@ test('M5.3-14. QuestionGenerator has no persistence, no HTTP, no direct provider
   assert.ok(content.includes("orchestrator.run('QUESTION_GENERATION'"));
 });
 
-test('M5.3-15. git state: clean tree, M5.3 commit at HEAD', async () => {
+test('M5.3-15. git state: clean tree, M5.3 implementation commit in history', async () => {
   const { execSync } = require('node:child_process');
   const status = execSync('git status --short', { encoding: 'utf8', cwd: require('node:path').join(__dirname, '..') });
   assert.equal(status.trim(), '', `working tree must be clean: ${status}`);
-  const head = execSync('git log --oneline -1', { encoding: 'utf8', cwd: require('node:path').join(__dirname, '..') }).trim();
-  assert.ok(head.includes('feat: implement QuestionGenerator and interview creation (M5.3)'), `HEAD must be the M5.3 commit: ${head}`);
+  // History invariant, not a HEAD assertion: the M5.3 implementation commit
+  // (4f81c2e) must exist as an ancestor of HEAD — later dedicated commits
+  // (e.g. 5dd9e42, the documentation/status cleanup) legitimately sit after it.
+  const ancestor = execSync('git merge-base --is-ancestor 4f81c2e HEAD && echo yes || echo no', {
+    encoding: 'utf8',
+    cwd: require('node:path').join(__dirname, '..'),
+  }).trim();
+  assert.equal(ancestor, 'yes', 'M5.3 implementation commit 4f81c2e must be an ancestor of HEAD');
 });
