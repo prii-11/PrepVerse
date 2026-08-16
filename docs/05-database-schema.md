@@ -274,7 +274,7 @@ Interview created → Interview.status: CREATED, questionGeneration.status: PEND
 
 User answers → Interview.answers[] appended, evaluationStatus: PENDING per answer
 
-Submit → Interview.status: EVALUATING
+Submit → Interview.status: EVALUATING   (two CAS gates: IN_PROGRESS → SUBMITTED, then SUBMITTED → EVALUATING; every evaluation write below carries the EVALUATING status precondition — see docs/02 §3 submission contract)
        → per answer: AI Orchestrator (ANSWER_EVALUATION), reads
          Interview.questions[].expectedTopics + the answer text
        → AIExecution logged per answer
