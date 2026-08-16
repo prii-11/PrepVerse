@@ -18,6 +18,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+// All git guard commands must run from the repository ROOT: `git diff` runs
+// from a subdirectory both limits pathspecs to that subdirectory and treats
+// repo-root-relative pathspecs like 'server/src' as 'server/server/src'
+// (matches nothing — silently vacuous). Resolve the root once here.
+const { execSync } = require('node:child_process');
+const REPO_ROOT = execSync('git rev-parse --show-toplevel', { cwd: __dirname, encoding: 'utf8' }).trim();
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const mongoose = require('mongoose');
 
@@ -788,7 +794,7 @@ test('M5.2-9. protected files unchanged in the M5.2 commit (git diff 3280a2e)', 
   ];
 
   for (const file of protectedFiles) {
-    const diff = execSync(`git diff 3280a2e~1 3280a2e -- ${file}`, { encoding: 'utf8', cwd: require('node:path').join(__dirname, '..') });
+    const diff = execSync(`git diff 3280a2e~1 3280a2e -- ${file}`, { encoding: 'utf8', cwd: REPO_ROOT });
     assert.equal(diff.trim(), '', `protected file must not be modified in the M5.2 commit: ${file}`);
   }
 });
@@ -805,7 +811,7 @@ test('M5.2-10. M5.1 orchestrator tests still pass (regression)', async () => {
 
 test('M5.2-11. working tree clean except for M5.2 changes', async () => {
   const { execSync } = require('node:child_process');
-  const status = execSync('git status --short', { encoding: 'utf8', cwd: require('node:path').join(__dirname, '..') });
+  const status = execSync('git status --short', { encoding: 'utf8', cwd: REPO_ROOT });
   const lines = status.trim().split('\n').filter(Boolean);
   // Only new/changed files for M5.2: resumeAnalyzer.js, errors.js, test file
   const m52Files = lines.filter(l => l.includes('resumeAnalyzer') || l.includes('errors.js') || l.includes('m5.1-ai-infra.test.js'));
@@ -1133,10 +1139,15 @@ test('M5.3-11. forbidden technology: none in questionGenerator.js or the M5.3 di
 
   const diff = execSync('git diff 4f81c2e~1 4f81c2e -- server/src docs/02-architecture-api.md docs/05-database-schema.md docs/07-ai-contracts.md', {
     encoding: 'utf8',
-    cwd: path.join(__dirname, '..'),
+    cwd: REPO_ROOT,
   });
+  // Scan only ADDED lines: the M5.3 commit removed comments that mentioned
+  // 'SkillProfileService'/'submit' (as out-of-scope), so the raw diff text
+  // legitimately contains those terms in DELETED lines. The guard's contract
+  // is that the milestone introduces none of them.
+  const added = diff.split('\n').filter((l) => l.startsWith('+') && !l.startsWith('+++')).join('\n');
   for (const term of forbidden) {
-    assert.ok(!diff.toLowerCase().includes(term.toLowerCase()), `M5.3 diff must not contain: ${term}`);
+    assert.ok(!added.toLowerCase().includes(term.toLowerCase()), `M5.3 diff must not contain: ${term}`);
   }
 });
 
@@ -1158,7 +1169,7 @@ test('M5.3-12. protected files unchanged and M4.3 methods intact (git diff 4f81c
     'server/src/ai/resumeAnalyzer.js',
   ];
   for (const file of protectedPaths) {
-    const diff = execSync(`git diff 4f81c2e~1 4f81c2e -- ${file}`, { encoding: 'utf8', cwd: require('node:path').join(__dirname, '..') });
+    const diff = execSync(`git diff 4f81c2e~1 4f81c2e -- ${file}`, { encoding: 'utf8', cwd: REPO_ROOT });
     assert.equal(diff.trim(), '', `protected file must not be modified in the M5.3 commit: ${file}`);
   }
   // No M4.3 method signature removed or altered (only additions allowed).
@@ -1169,7 +1180,7 @@ test('M5.3-12. protected files unchanged and M4.3 methods intact (git diff 4f81c
   ]) {
     const removed = execSync(`git diff 4f81c2e~1 4f81c2e -- ${file} | grep -E "^-.*(async )?function" || true`, {
       encoding: 'utf8',
-      cwd: require('node:path').join(__dirname, '..'),
+      cwd: REPO_ROOT,
     });
     assert.equal(removed.trim(), '', `no M4.3 method may be removed or altered in the M5.3 commit: ${file}`);
   }
@@ -1203,14 +1214,14 @@ test('M5.3-14. QuestionGenerator has no persistence, no HTTP, no direct provider
 
 test('M5.3-15. git state: clean tree, M5.3 implementation commit in history', async () => {
   const { execSync } = require('node:child_process');
-  const status = execSync('git status --short', { encoding: 'utf8', cwd: require('node:path').join(__dirname, '..') });
+  const status = execSync('git status --short', { encoding: 'utf8', cwd: REPO_ROOT });
   assert.equal(status.trim(), '', `working tree must be clean: ${status}`);
   // History invariant, not a HEAD assertion: the M5.3 implementation commit
   // (4f81c2e) must exist as an ancestor of HEAD — later dedicated commits
   // (e.g. 5dd9e42, the documentation/status cleanup) legitimately sit after it.
   const ancestor = execSync('git merge-base --is-ancestor 4f81c2e HEAD && echo yes || echo no', {
     encoding: 'utf8',
-    cwd: require('node:path').join(__dirname, '..'),
+    cwd: REPO_ROOT,
   }).trim();
   assert.equal(ancestor, 'yes', 'M5.3 implementation commit 4f81c2e must be an ancestor of HEAD');
 });
@@ -1791,7 +1802,7 @@ test('M5.4-12. scoring config: EVALUATION_WEIGHTS + REPORT_CAPS centralized, add
   const { execSync } = require('node:child_process');
   const diff = execSync('git diff HEAD~1 -- server/src/config/scoring.js', {
     encoding: 'utf8',
-    cwd: require('node:path').join(__dirname, '..'),
+    cwd: REPO_ROOT,
   });
   const removed = diff.split('\n').filter((line) => line.startsWith('-') && !line.startsWith('---'));
   assert.equal(removed.length, 0, 'M5.4 must only add to SCORING_CONFIG, never remove or alter existing entries');
@@ -1824,20 +1835,21 @@ test('M5.4-13. answerEvaluator: no persistence, no HTTP, no SkillProfileService,
   const { execSync } = require('node:child_process');
   const diff = execSync('git diff HEAD~1 -- server/src', {
     encoding: 'utf8',
-    cwd: pathNode.join(__dirname, '..'),
+    cwd: REPO_ROOT,
   });
+  const added = diff.split('\n').filter((line) => line.startsWith('+') && !line.startsWith('+++')).join('\n');
   for (const term of forbidden) {
-    assert.ok(!diff.toLowerCase().includes(term.toLowerCase()), `M5.4 diff must not contain: ${term}`);
+    assert.ok(!added.toLowerCase().includes(term.toLowerCase()), `M5.4 diff must not contain: ${term}`);
   }
 });
 
 test('M5.4-14. git state: clean tree, M5.4 contract-resolution commit in history', async () => {
   const { execSync } = require('node:child_process');
-  const status = execSync('git status --short', { encoding: 'utf8', cwd: require('node:path').join(__dirname, '..') });
+  const status = execSync('git status --short', { encoding: 'utf8', cwd: REPO_ROOT });
   assert.equal(status.trim(), '', `working tree must be clean: ${status}`);
   const ancestor = execSync('git merge-base --is-ancestor 027f421 HEAD && echo yes || echo no', {
     encoding: 'utf8',
-    cwd: require('node:path').join(__dirname, '..'),
+    cwd: REPO_ROOT,
   }).trim();
   assert.equal(ancestor, 'yes', 'M5.4 contract-resolution commit 027f421 must be an ancestor of HEAD');
 });
