@@ -21,7 +21,7 @@ process.env.CLIENT_ORIGIN = 'http://localhost:5173';
 process.env.JWT_ACCESS_SECRET = 'test-jwt-secret';
 process.env.GEMINI_API_KEY = 'test-gemini-api-key-12345';
 
-const test = require('node:test');
+const { test, mock: testMocks } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -227,22 +227,45 @@ test('A. only orchestrator.js imports the Gemini provider', () => {
 
 test('B1. 429 → 429 → success: exactly 3 attempts with configured backoff', async () => {
   const originalDelays = AI_CONFIG.rateLimitRetryDelaysMs;
-  AI_CONFIG.rateLimitRetryDelaysMs = [10, 25, 99999];
   mock.enqueue(retryableItem(), retryableItem(), successItem(JSON.stringify(VALID_RESUME)));
 
-  const { result, execution } = await orchestrator.run('RESUME_ANALYSIS', resumePayload());
+  // Deterministic retry timing: node:test mock timers fake both the backoff
+  // setTimeout()s and Date.now() (which the provider mock records per call),
+  // so the test advances the simulated clock to the exact configured delays.
+  // Wall-clock zero-slack sampling was flaky: a real setTimeout can fire a
+  // fraction of a ms early and integer-ms Date.now() rounding then samples
+  // the gap one ms below the configured delay.
+  // Synchronization model: each await yields to the microtask queue, so by
+  // the time a tick() runs, the previous attempt's rejection has been caught
+  // and its backoff timer scheduled: attempt 1 fails at t=0 → tick(10) fires
+  // the 10ms backoff (attempt 2 at t=10) → tick(25) fires the 25ms backoff
+  // (attempt 3 at t=35, success). The zero-ticks only advance microtasks,
+  // guaranteeing the next timer is scheduled before time moves on.
+  testMocks.timers.enable({ apis: ['setTimeout', 'Date'] });
+  try {
+    AI_CONFIG.rateLimitRetryDelaysMs = [10, 25, 99999];
 
-  assert.equal(mock.calls.length, 3, 'must make exactly 3 provider calls');
-  assert.equal(execution.attempts, 3);
-  assert.deepEqual(result, sanitizeResumeAnalysis(VALID_RESUME));
-  const [c1, c2, c3] = mock.calls;
-  assert.equal(c1.kind, 'retryable');
-  assert.equal(c2.kind, 'retryable');
-  assert.equal(c3.kind, 'success');
-  assert.ok(c2.at - c1.at >= 10, 'wait 1s-equivalent before attempt 2 (uses rateLimitRetryDelaysMs[0])');
-  assert.ok(c3.at - c2.at >= 25, 'wait 2s-equivalent before attempt 3 (uses rateLimitRetryDelaysMs[1])');
+    const runPromise = orchestrator.run('RESUME_ANALYSIS', resumePayload());
+    await testMocks.timers.tick(0);
+    await testMocks.timers.tick(10);
+    await testMocks.timers.tick(0);
+    await testMocks.timers.tick(25);
+    const { result, execution } = await runPromise;
 
-  AI_CONFIG.rateLimitRetryDelaysMs = originalDelays;
+    assert.equal(mock.calls.length, 3, 'must make exactly 3 provider calls');
+    assert.equal(execution.attempts, 3);
+    assert.deepEqual(result, sanitizeResumeAnalysis(VALID_RESUME));
+    const [c1, c2, c3] = mock.calls;
+    assert.equal(c1.kind, 'retryable');
+    assert.equal(c2.kind, 'retryable');
+    assert.equal(c3.kind, 'success');
+    // Under mocked time the sampled gaps are exactly the configured delays:
+    assert.equal(c2.at - c1.at, 10, 'attempt 2 occurs after exactly 10ms (rateLimitRetryDelaysMs[0])');
+    assert.equal(c3.at - c2.at, 25, 'attempt 3 occurs after exactly 25ms (rateLimitRetryDelaysMs[1])');
+  } finally {
+    AI_CONFIG.rateLimitRetryDelaysMs = originalDelays;
+    testMocks.timers.reset();
+  }
 });
 
 test('B2. production default backoff is 1s/2s/4s, max 3 attempts', () => {
