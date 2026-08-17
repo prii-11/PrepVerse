@@ -16,6 +16,9 @@ const skillSchema = new Schema({
   // (docs/05 §2 note) — NOT expressible as a Mongoose array-unique constraint.
   assessed: { type: Boolean, default: false },
   level: { type: String, enum: ['BEGINNER', 'INTERMEDIATE', 'ADVANCED', null], default: null },
+  // M5.5 (docs/08 §9a): at-risk neighborhood — the most recent interview
+  // assessed this skill but produced only 'missing' addressed signals.
+  potentialGap: { type: Boolean, default: false },
   evidenceLog: [skillEvidenceSchema],
   lastAssessed: Date,
 });

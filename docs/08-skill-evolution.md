@@ -12,6 +12,10 @@ skill (embedded in User.currentSkillProfile.skills[])
 ├── sources: (RESUME | INTERVIEW)[]     // unique values only
 ├── assessed: boolean
 ├── level: BEGINNER | INTERMEDIATE | ADVANCED | null
+├── potentialGap: boolean                // M5.5 — at-risk neighborhood: the
+│                                       // latest interview assessed this skill
+│                                       // with only 'missing' addressed signals
+│                                       // (§9a)
 ├── evidenceLog: EvidenceEntry[]        // rolling window, max 5, newest last
 └── lastAssessed: Date | null
 ```
@@ -231,6 +235,20 @@ A profile-sync failure does **not** invalidate the completed interview. It is a 
 **FAILED semantics (M5.5 resolution):** `profileSyncStatus: FAILED` is **terminal for MVP**. There is no automatic retry, no retry-on-read, and no retry endpoint. The completed interview and its report remain valid; the FAILED flag means only that skill-profile synchronization did not complete. "Retryable" means re-invocation is safe (evidence is deduplicated by interviewId), so a future milestone may add explicit re-processing — it does not require a retry mechanism in MVP.
 
 **Caller behavior on sync failure (M5.5 resolution):** the interview submission flow invokes synchronization synchronously after the COMPLETED write (docs/05 §7). If it throws, the caller preserves `Interview.status = COMPLETED` and the completed report, marks `report.profileSyncStatus = FAILED` via a best-effort write (the synchronization transaction has already rolled back — this write is not part of it), and does not convert the interview to `EVALUATION_FAILED`. The submission remains a successful completion from the interview's perspective. If the caller's separate FAILED-marker write itself fails after `updateFromInterview()` has already rolled back, the interview may remain observably `profileSyncStatus = PENDING` indefinitely; this is an accepted MVP limitation and does not introduce a separate recovery mechanism.
+
+### §9a. Synchronization mechanics (M5.5 resolution)
+
+**Sync markers.** `SkillProfileService` writes an ACTIVE marker into `Interview.report.skillSync = { active, startedAt, completedAt, failedAt, reason }` before starting the transaction (via `updateOne` — markers are observability, not status-CAS transitions) and clears it (with `profileSyncStatus: COMPLETED`) inside the transaction, so a crash between "profile updated" and "marker cleared" rolls back both. The marker write is not a precondition: if it fails, the sync proceeds (logged only).
+
+**BUSY / EXPIRED reads (service-level, no HTTP endpoint).** `getSyncStatus(userId, interviewId)` reads the marker: an unfinished marker answers `BUSY` while its age is ≤ `SYNC_MARKER_STALE_MS` and `EXPIRED` once it exceeds the window (the sync that wrote it crashed); without an unfinished marker it reports the persisted `profileSyncStatus` (`PENDING` / `COMPLETED` / `FAILED`). EXPIRED markers are not auto-cleared in MVP.
+
+**Transaction order.** Inside the transaction the writes are: user profile first (`user.save({ session })`), then the interview's `COMPLETED` flag + marker clear (`interview.save({ session })`). A mid-transaction failure rolls back both.
+
+**FAILED classification.** `wrapPersistenceError(error)` decides: only persistence-level errors convert a sync to `FAILED` (via `markSyncFailed` — a best-effort standalone write that never downgrades a `COMPLETED` sync). Domain errors (`NotFoundError` / `ValidationError` / `ConflictError`) are rethrown untouched — they are caller bugs, not persistence failures. The FAILED marker stores a sanitized reason (error code/name, never raw error text) in `report.skillSync.reason`.
+
+**`potentialGap` (new skill-record state, docs/05 §2).** The normalization layer flags a skill as a `potentialGap` when the interview's only addressed `topicAssessments` signal for it was `missing` (negative evidence, docs/08 §2) — i.e. the skill was assessed but never reached a weak-or-better neighborhood. `SkillProfileService` sets `skill.potentialGap = true` on the profile record. Rolls into `skill.assessed`/`level` semantics unchanged: a gap-flagged skill still carries its (0-signal) evidence event like any other skill.
+
+**Normalization path (locked rule, layer boundaries).** `topic → skill` = AnswerEvaluator, `skill → interview` = `server/src/domain/skills/evidenceNormalizer.js` (pure, persistence-free: `normalizeInterviewEvidence({ answers }) → { events: [{ skillKey, signal, answerIds }], potentialGaps: [skillKey] }`), `interview → profile` = `SkillProfileService.updateFromInterview({ userId, interviewId, events, potentialGaps })`. The submit flow calls them in that order after the COMPLETED CAS, then re-reads the interview so the response reflects the persisted post-sync state (docs/02 §3).
 
 ---
 

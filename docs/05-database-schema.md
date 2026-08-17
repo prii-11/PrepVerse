@@ -40,6 +40,7 @@ No `refreshtokens` collection — final auth decision is stateless short-lived J
       sources: [{ type: String, enum: ['RESUME', 'INTERVIEW'], required: true }], // service enforces uniqueness
       assessed: { type: Boolean, default: false },
       level: { type: String, enum: ['BEGINNER', 'INTERMEDIATE', 'ADVANCED', null], default: null },
+      potentialGap: { type: Boolean, default: false }, // M5.5 — at-risk neighborhood (docs/08 §9a)
       evidenceLog: [{
         interviewId: { type: ObjectId, ref: 'Interview' },
         answerIds: [{ type: ObjectId }],
@@ -181,8 +182,15 @@ No `refreshtokens` collection — final auth decision is stateless short-lived J
       type: String,                // NOT a top-level Interview field. Independent of
       enum: ['PENDING', 'COMPLETED', 'FAILED'],  // Interview.status: an interview can be
       default: 'PENDING'           // COMPLETED while its skill-profile sync is still
-    }                               // PENDING or FAILED — FAILED is terminal for MVP
+    },                              // PENDING or FAILED — FAILED is terminal for MVP
                                     // (docs/08 §9): no retry, no re-processing in MVP.
+    skillSync: {                    // M5.5 sync markers (docs/08 §9a) — written by
+      active: { type: Boolean, default: false },  // SkillProfileService; read via
+      startedAt: Date,              // getSyncStatus() as BUSY/EXPIRED while unfinished,
+      completedAt: Date,            // otherwise the persisted profileSyncStatus.
+      failedAt: Date,
+      reason: String                // sanitized failure code/name — never raw error text
+    },
   },
 
   startedAt: Date,

@@ -3,6 +3,12 @@
 // M5.3: creation (createInterview) — the create → generate → persist sequence.
 // M5.4: submission (submitInterview) — the two-CAS evaluation lifecycle, report
 // aggregation, and the extended cancellation allow-list (docs/02 §3).
+// M5.5: after the COMPLETED CAS, evidenceNormalizer folds the answers'
+// topicAssessments into per-skill evidence events and SkillProfileService
+// applies them to User.currentSkillProfile in a MongoDB transaction (docs/08
+// §9). A sync failure never fails the submission: the interview stays
+// COMPLETED and the report carries profileSyncStatus FAILED (docs/02 §3,
+// docs/08 §9).
 //
 // Owned model (docs/05 §4): Interview — the only model this service may write
 // to. Read-only dependencies: RoleSkillCatalog (via roleSkillCatalog.service —
@@ -18,6 +24,8 @@
 const Interview = require('./interview.model');
 const User = require('../users/user.model');
 const roleSkillCatalogService = require('../analytics/roleSkillCatalog.service');
+const skillProfileService = require('../analytics/skillProfile.service');
+const evidenceNormalizer = require('../../domain/skills/evidenceNormalizer');
 const questionGenerator = require('../../ai/questionGenerator');
 const answerEvaluator = require('../../ai/answerEvaluator');
 const { SCORING_CONFIG } = require('../../config/scoring');
@@ -475,9 +483,42 @@ async function submitInterview(userId, id) {
     throw new ConflictError('Interview is not in progress', { code: 'INTERVIEW_NOT_IN_PROGRESS' });
   }
 
-  // Successful submission response = the same Interview detail shape as
-  // GET /:id (docs/02 §3) — no new response envelope.
-  const detail = completed.toObject({ versionKey: false });
+  // M5.5 skill-profile synchronization (docs/02 §3, docs/08 §9): runs
+  // synchronously AFTER the COMPLETED CAS. Normalization is the pure
+  // interview→skill layer (docs/08 locked rule); SkillProfileService applies
+  // the events transactionally. A sync failure is a derived-state failure:
+  // the interview stays COMPLETED, its report stays intact, and
+  // report.profileSyncStatus is marked FAILED (best-effort) — the submission
+  // is still a successful completion, never EVALUATION_FAILED.
+  try {
+    const { events, potentialGaps } = evidenceNormalizer.normalizeInterviewEvidence(completed);
+    await skillProfileService.updateFromInterview({
+      userId,
+      interviewId: id,
+      events,
+      potentialGaps,
+    });
+  } catch (syncError) {
+    try {
+      await skillProfileService.markSyncFailed(userId, id, syncError);
+    } catch (markError) {
+      // docs/08 §9 accepted MVP limitation: if the FAILED-marker write itself
+      // fails, the interview may remain observably PENDING — logged, no
+      // recovery mechanism introduced.
+      console.error(`[interview] failed to persist sync FAILED marker: ${markError.message}`);
+    }
+  }
+
+  // Post-sync re-read: the response reflects the persisted post-sync state
+  // (docs/02 §3 M5.5 resolution) — profileSyncStatus is COMPLETED when the
+  // transaction committed, FAILED when it did not, never the stale PENDING
+  // snapshot. Successful submission response = the same Interview detail
+  // shape as GET /:id (docs/02 §3) — no new response envelope.
+  const finalState = await Interview.findById(id);
+  if (!finalState) {
+    throw new NotFoundError('Interview not found');
+  }
+  const detail = finalState.toObject({ versionKey: false });
   delete detail.userId;
   return detail;
 }

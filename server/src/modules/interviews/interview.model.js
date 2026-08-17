@@ -94,6 +94,16 @@ const interviewSchema = new Schema({
       enum: ['PENDING', 'COMPLETED', 'FAILED'],
       default: 'PENDING',
     },
+    // M5.5 sync markers (docs/08 §9a): written by SkillProfileService.
+    // active+startedAt = an in-flight (BUSY) or crashed (EXPIRED) sync;
+    // completedAt/failedAt clear it. Read via the service's getSyncStatus().
+    skillSync: {
+      active: { type: Boolean, default: false },
+      startedAt: Date,
+      completedAt: Date,
+      failedAt: Date,
+      reason: String, // sanitized failure code/name, never raw error text
+    },
   },
 
   startedAt: Date,
