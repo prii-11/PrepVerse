@@ -4,6 +4,13 @@
 // mocked deterministically.
 // Uses node:test (built-in) + mongodb-memory-server (existing devDependency)
 // so the AIExecution persistence claims are proven against an actual database.
+// The in-memory instance is a SINGLE-NODE REPLICA SET (MongoMemoryReplSet,
+// replSet.count: 1) — SkillProfileService uses MongoDB transactions (docs/08
+// §9, AGENTS.md rule 9), and a standalone mongod rejects transaction
+// commands ("Transaction numbers are only allowed on a replica set member or
+// mongos"). The connection string from getUri() includes the replicaSet=
+// parameter; production connection behavior (server/src/config/db.js) is
+// untouched by this test-only choice.
 //
 // Environment note: config/env.js fail-fasts at require time on missing
 // startup vars and config/ai.js throws without GEMINI_API_KEY — set all of
@@ -24,7 +31,7 @@ const path = require('node:path');
 // (matches nothing — silently vacuous). Resolve the root once here.
 const { execSync } = require('node:child_process');
 const REPO_ROOT = execSync('git rev-parse --show-toplevel', { cwd: __dirname, encoding: 'utf8' }).trim();
-const { MongoMemoryServer } = require('mongodb-memory-server');
+const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const mongoose = require('mongoose');
 
 const { AI_CONFIG } = require('../src/config/ai');
@@ -153,7 +160,7 @@ function resumePayload(prompt = 'Analyze this resume. Target role: Backend Devel
 // ---- DB lifecycle -----------------------------------------------------------
 
 test.before(async () => {
-  mongoServer = await MongoMemoryServer.create();
+  mongoServer = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
   await mongoose.connect(mongoServer.getUri());
 });
 
