@@ -49,7 +49,7 @@ Each module: `controller → service → routes → validation`. Controllers are
 
 ## Current status
 
-See `ROADMAP.md` for what exists and what's next. Backend milestones M2.1–M4.5 and M5.1–M5.4 are CLOSED; the current milestone is M5.5 (Skill Evolution — normalization of `topicAssessments` into `User.currentSkillProfile` evidence, per `docs/08`). `client/` remains the pre-design prototype — don't assume it matches the design.
+See `ROADMAP.md` for what exists and what's next. Backend milestones M2.1–M4.5 and M5.1–M5.5 are CLOSED; the current milestone is M5.6 (Readiness Service — skill coverage-weighted readiness per `docs/07` §6 and `docs/08` §6). `client/` remains the pre-design prototype — don't assume it matches the design.
 
 
 ## Canonical design rule
