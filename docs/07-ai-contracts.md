@@ -314,7 +314,8 @@ communication = average of report.communicationScore across ALL
                completed interviews, same reasoning
 
 consistency = 100 - normalized volatility of recent scores
-              (volatility = stddev of last 3-5 overallScores,
+              (volatility = stddev of the last 5 overallScores
+               (SCORING_CONFIG.RECENT_WINDOW_MAX = 5),
                normalized against a reasonable max-expected stddev,
                clamped [0,100])
 
@@ -322,6 +323,8 @@ improvementTrend = normalized slope of overallScore across recent
                     interviews (positive slope → high score,
                     flat → mid, negative → low), clamped [0,100]
 ```
+
+**Resolved (M5.6 — window pinned):** the recent window is exactly the last **5** completed interviews (`SCORING_CONFIG.RECENT_WINDOW_MAX = 5`, previously worded as "last 3-5"). Within it, consistency is measured from ≥ 3 scores and improvementTrend from ≥ 2; below those counts the cold-start priors (§ above) apply. No other reading of the window is valid.
 
 **Resolved gap (this was genuinely undefined — neither "reasonable max-expected stddev" nor "normalized slope" had a concrete mapping anywhere in this or any other design doc; filled in below rather than left for an implementer to invent silently):**
 
@@ -331,7 +334,7 @@ consistency = 100 - normalizedVolatility
 
 MAX_EXPECTED_STDDEV = 50
   (rationale: overallScore ∈ [0,100]; a stddev of 50 across a small
-   3-5-point sample already represents near-maximal volatility for
+   5-point window already represents near-maximal volatility for
    a bounded [0,100] range — e.g. alternating between very low and
    very high scores. Anything at or beyond that saturates the
    volatility component to fully "inconsistent," consistency = 0.)
@@ -351,7 +354,9 @@ MAX_EXPECTED_SLOPE = 20
 
 **Both constants (`MAX_EXPECTED_STDDEV`, `MAX_EXPECTED_SLOPE`) are proposed defaults, not empirically derived — same status as the readiness formula's own top-level weights and `overallScore`'s resolved `0.50/0.30/0.20` split (§4 above). They should live in the same centralized `SCORING_CONFIG` (per Design 5's tuning principle), not be hardcoded inline, so they're easy to revisit once real interview data exists to check them against.**
 
-**Resolved gap (added — this doc never specified the technical/communication averaging window, only consistency/improvementTrend's "last 3-5"; filled in above rather than left for an implementer to guess):** technical and communication average across the user's full completed-interview history, while consistency and improvementTrend deliberately use only a recent window — this is the intended distinction between "overall competence" and "recent behavior," not an oversight.
+**Resolved gap (added — this doc never specified the technical/communication averaging window, only consistency/improvementTrend's recent-window rule; filled in above rather than left for an implementer to guess):** technical and communication average across the user's full completed-interview history, while consistency and improvementTrend deliberately use only a recent window (the last 5, pinned as `RECENT_WINDOW_MAX`) — this is the intended distinction between "overall competence" and "recent behavior," not an oversight.
+
+**Resolved (M5.6 — inclusion gate):** `Interview.status === COMPLETED` is the sole readiness inclusion gate. Every completed interview's report contributes — including reports whose `report.profileSyncStatus` is `PENDING` or `FAILED`. A failed profile sync does not remove the interview from readiness: `COMPLETED` stays `COMPLETED` with its report intact (docs/08 §9/§9a), and the report's scores are still lifetime/interview evidence. `CANCELLED` and `EVALUATION_FAILED` interviews never contribute.
 
 This is a `ReadinessService` calculation — computed on read, never stored, per the earlier decision.
 

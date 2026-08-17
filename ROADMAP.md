@@ -1,6 +1,6 @@
 # ROADMAP.md
 
-Status: system design complete (`/docs/01` – `/docs/08`). Server milestones `M2.1`–`M4.5` and `M5.1`–`M5.5` are implemented and CLOSED; the next milestone is `M5.6` (readiness/skill coverage per `docs/07` §6). This document maps the original prototype against that design as the historical implementation plan; the milestone table below (§ Build order) is the live status index.
+Status: system design complete (`/docs/01` – `/docs/08`). Server milestones `M2.1`–`M4.5` and `M5.1`–`M5.6` are implemented and CLOSED; the next milestone is `M6` (storage per `docs/06`). This document maps the original prototype against that design as the historical implementation plan; the milestone table below (§ Build order) is the live status index.
 
 ## Server — `server/`
 
@@ -58,8 +58,8 @@ Each milestone follows: MASTER PROMPT → OpenCode implements → CHECK PROMPT (
 | M3 | Auth: stateless short-lived JWT only — signup → login → middleware → /me → logout. **No RefreshToken collection, no refresh cookie, no rotation** (docs/06 §1.1, final) | CLOSED |
 | M4 | Core domain APIs: onboarding, resume metadata, interviews, reports — real contracts, no AI yet | CLOSED (implemented as M4.1–M4.4) |
 | M4.5 | Skill engine: RoleSkillCatalog seed + SkillProfileService, deterministic and unit-tested with zero Gemini dependency (docs/08) | CLOSED |
-| M5 | AI: Gemini adapter, AI Orchestrator, Resume Analysis, Question Generation, Answer Evaluation + topicAssessments, AIExecution logging | M5.1–M5.5 CLOSED (adapter, orchestrator, resume analysis, question generation, answer evaluation + topicAssessments + submission, AIExecution, skill evolution: evidence normalization + transactional profile sync per docs/08). Next: M5.6 (readiness computation per docs/07 §6) |
-| M5.6 | Readiness Service: skillCoverage, weighted readiness + breakdown (docs/07 §6, docs/08 §6) | NOT STARTED |
+| M5 | AI: Gemini adapter, AI Orchestrator, Resume Analysis, Question Generation, Answer Evaluation + topicAssessments, AIExecution logging | M5.1–M5.6 CLOSED (adapter, orchestrator, resume analysis, question generation, answer evaluation + topicAssessments + submission, AIExecution, skill evolution: evidence normalization + transactional profile sync, readiness: coverage-weighted score + breakdown per docs/07 §6). Next: M6 (storage) |
+| M5.6 | Readiness Service: skillCoverage, weighted readiness + breakdown (docs/07 §6, docs/08 §6) | CLOSED (ReadinessService verified end-to-end by the M5.6 behavior-level contract suite; docs drift reconciled) |
 | M6 | Storage: Supabase Storage, resume upload/download, signed URLs | NOT STARTED |
 | M7 | Frontend integration: replace every mock service with real API calls, page by page | NOT STARTED |
 | M8 | Hardening: rate limits, validation, security review, concurrency, tests, deployment | NOT STARTED |

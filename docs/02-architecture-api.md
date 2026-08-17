@@ -51,7 +51,7 @@ AIExecution  (internal log, not user-facing)
 └── createdAt
 ```
 
-Readiness score is **never stored** — it's computed on read by `ReadinessService.calculateReadiness(userId)` from `currentSkillProfile` + recent interview reports. PracticePlan is likewise computed on-demand, not persisted.
+Readiness score is **never stored** — it's computed on read by `ReadinessService.getReadiness(userId)` from `currentSkillProfile` + recent interview reports. PracticePlan is likewise computed on-demand, not persisted.
 
 ---
 
@@ -217,7 +217,7 @@ Layering per request (see §2.2 for the full, authoritative pipeline): `IP Rate 
 ### Analytics
 | Method | Path | Notes |
 |---|---|---|
-| GET | /api/v1/analytics/readiness | computed on read via ReadinessService — { score, breakdown } |
+| GET | /api/v1/analytics/readiness | computed on read via `ReadinessService.getReadiness(userId)` (docs/07 §6) — `{ score, breakdown, interviewCount }`: `score` 0–100 or null (null when readiness cannot be computed — see docs/07 §6 cold start); `breakdown` = `{ technical, communication, skillCoverage, consistency, improvementTrend }`, each 0–100 or null, neutral-prior components reported as 50; `interviewCount` = number of `COMPLETED` interviews included. **Inclusion gate:** every `Interview.status === COMPLETED` interview contributes regardless of `report.profileSyncStatus`, including `FAILED` (docs/07 §6). |
 | GET | /api/v1/analytics/progress | score trend across completed interviews, ordered chronologically by `completedAt` (resolved — previously unspecified; `completedAt` chosen over `createdAt`/`report.generatedAt` since it's the field that semantically means "when this interview finished," already a real top-level field as of M4.3) |
 | GET | /api/v1/analytics/practice-plan | computed on-demand from currentSkillProfile |
 
