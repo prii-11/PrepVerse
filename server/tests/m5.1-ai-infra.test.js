@@ -1,7 +1,8 @@
 // M5.1 AI infrastructure tests (docs/07 §5 retry policy, M5.1 §23 requirements
-// A-J) plus the M5.2 ResumeAnalyzer, M5.3 QuestionGenerator/creation, and M5.4
-// answer-evaluation/submission suites. No real Gemini calls — the provider is
-// mocked deterministically.
+// A-J) plus the M5.2 ResumeAnalyzer, M5.3 QuestionGenerator/creation, M5.4
+// answer-evaluation/submission, and M5.5 skill-evolution (evidence
+// normalization + transactional profile sync) suites. No real Gemini calls —
+// the provider is mocked deterministically.
 // Uses node:test (built-in) + mongodb-memory-server (existing devDependency)
 // so the AIExecution persistence claims are proven against an actual database.
 // The in-memory instance is a SINGLE-NODE REPLICA SET (MongoMemoryReplSet,
@@ -46,6 +47,8 @@ const resumeAnalyzer = require('../src/ai/resumeAnalyzer');
 const questionGenerator = require('../src/ai/questionGenerator');
 const { ResumeTextExtractionError } = require('../src/utils/errors');
 const interviewService = require('../src/modules/interviews/interview.service');
+const skillProfileService = require('../src/modules/analytics/skillProfile.service');
+const evidenceNormalizer = require('../src/domain/skills/evidenceNormalizer');
 const Interview = require('../src/modules/interviews/interview.model');
 const User = require('../src/modules/users/user.model');
 const RoleSkillCatalog = require('../src/modules/analytics/roleSkillCatalog.model');
@@ -1412,7 +1415,11 @@ test('M5.4-1. submit end-to-end: two CAS gates, per-answer evaluations with prov
     ['Add a concrete example of a covering index.'],
     'recommendations: improvementTips under the same dedup rules'
   );
-  assert.equal(detail.report.profileSyncStatus, 'PENDING', 'nested under report, independent of Interview.status (M5.5 next)');
+  assert.equal(
+    detail.report.profileSyncStatus,
+    'COMPLETED',
+    'M5.5: the response is re-read AFTER the synchronous profile sync, so it reflects the persisted post-sync state (docs/02 §3)'
+  );
   assert.ok(detail.report.generatedAt instanceof Date);
 
   const persisted = await Interview.findById(created._id);
@@ -1792,7 +1799,18 @@ test('M5.4-11. concurrency (B): evaluation wins the race against a concurrent ca
   };
 
   try {
-    const cancelPromise = interviewService.cancelInterview(user._id.toString(), interview._id.toString());
+    // The losing cancel's CAS write runs the moment releaseCancel() fires in
+    // the interceptor. Since M5.5, the winner's submit continues with the
+    // post-COMPLETED profile sync, so the loser can reject BEFORE any later
+    // assertion attaches a handler — capture the outcome eagerly instead, and
+    // assert on it once it settles (same contract, no unhandled rejection).
+    let cancelOutcome = null;
+    const cancelPromise = interviewService
+      .cancelInterview(user._id.toString(), interview._id.toString())
+      .then(
+        (result) => { cancelOutcome = { result }; },
+        (error) => { cancelOutcome = { error }; }
+      );
     const detail = await withTimeout(
       interviewService.submitInterview(user._id.toString(), interview._id.toString()),
       5000,
@@ -1802,11 +1820,11 @@ test('M5.4-11. concurrency (B): evaluation wins the race against a concurrent ca
     assert.ok(detail.report && typeof detail.report.overallScore === 'number', 'intact report');
     assert.equal(detail.answers[0].evaluationStatus, 'COMPLETED');
 
-    await assert.rejects(
-      withTimeout(cancelPromise, 5000, 'cancel should not hang after the evaluation commits'),
-      (err) => err.code === 'CONFLICT' && err.details.code === 'INTERVIEW_NOT_CANCELLABLE',
-      'the losing cancel reports the expected conflict'
-    );
+    await waitFor(() => cancelOutcome !== null, { timeoutMs: 5000 });
+    assert.ok(cancelOutcome.error, 'the losing cancel rejects with the expected conflict');
+    assert.equal(cancelOutcome.error.code, 'CONFLICT');
+    assert.equal(cancelOutcome.error.details.code, 'INTERVIEW_NOT_CANCELLABLE', 'the losing cancel reports the expected conflict');
+    await cancelPromise;
   } finally {
     Interview.findOneAndUpdate = original;
   }
@@ -1861,15 +1879,22 @@ test('M5.4-13. answerEvaluator: no persistence, no HTTP, no SkillProfileService,
   assert.ok(content.includes("orchestrator.run('ANSWER_EVALUATION'"));
   assert.ok(content.includes("entityId: interviewId"), 'threads the interview _id for AIExecution attribution');
 
-  // The M5.4 code diff must introduce none of the out-of-scope technologies.
+  // File-level checks above remain fully in force: answerEvaluator.js is
+  // untouched by M5.5. The DIFF-level scan spans the M5.5 changes (baseline =
+  // the pre-M5.5 HEAD 54e8884, so later commits cannot make this vacuous):
+  // 'SkillProfileService'/'evidenceLog' are now in scope for M5.5 (they are
+  // legitimately introduced by src/modules/analytics/skillProfile.service.js
+  // and src/domain/skills/evidenceNormalizer.js) and are dropped from the
+  // diff-level forbidden set, but out-of-scope technologies must still never
+  // enter server/src through any M5.5 change.
   const { execSync } = require('node:child_process');
-  const diff = execSync('git diff HEAD~1 -- server/src', {
+  const diff = execSync('git diff 54e8884 -- server/src', {
     encoding: 'utf8',
     cwd: REPO_ROOT,
   });
   const added = diff.split('\n').filter((line) => line.startsWith('+') && !line.startsWith('+++')).join('\n');
-  for (const term of forbidden) {
-    assert.ok(!added.toLowerCase().includes(term.toLowerCase()), `M5.4 diff must not contain: ${term}`);
+  for (const term of ['supabase', 'multer', 'busboy']) {
+    assert.ok(!added.toLowerCase().includes(term.toLowerCase()), `M5.4+M5.5 diff must not contain: ${term}`);
   }
 });
 
@@ -1882,4 +1907,512 @@ test('M5.4-14. git state: clean tree, M5.4 contract-resolution commit in history
     cwd: REPO_ROOT,
   }).trim();
   assert.equal(ancestor, 'yes', 'M5.4 contract-resolution commit 027f421 must be an ancestor of HEAD');
+});
+
+// =============================================================================
+// M5.5 — Skill evolution: topicAssessments → evidenceNormalizer → transactional
+// profile sync (docs/08 §2/§4/§5/§9/§9a, docs/02 §3 post-sync response contract)
+// =============================================================================
+
+// A COMPLETED interview carrying an evaluated answer, for driving
+// updateFromInterview() directly (the staging-style path: the service reads
+// the interview for ownership/status, the caller supplies pre-normalized
+// events per docs/08 §9a).
+async function m55CompletedFixture(user, { evaluation }) {
+  const { interview, questions } = await m54InterviewFixture(user, {
+    answerSpecs: [{ questionIndex: 0, text: 'An index is a sorted structure.' }],
+    status: 'COMPLETED',
+  });
+  interview.answers[0].evaluationStatus = 'COMPLETED';
+  interview.answers[0].evaluation = evaluation;
+  interview.report = { overallScore: 50, weaknesses: [] };
+  await interview.save();
+  return { interview, questions };
+}
+
+const m55Eval = (skillKey, overrides = {}) =>
+  m54UniformEval(skillKey, { ...overrides });
+
+test('M5.5-1. evidenceNormalizer: docs/08 §2 mapping (0/1/2/3), addressed:false silence, missing → 0 + potentialGap', () => {
+  const goodAnswer = {
+    _id: new mongoose.Types.ObjectId(),
+    evaluationStatus: 'COMPLETED',
+    evaluation: { topicAssessments: [{ skillKey: 'mongodb', addressed: true, quality: 'good' }] },
+  };
+  const weakAnswer = {
+    _id: new mongoose.Types.ObjectId(),
+    evaluationStatus: 'COMPLETED',
+    evaluation: { topicAssessments: [{ skillKey: 'mongodb', addressed: true, quality: 'weak' }] },
+  };
+  const missingAnswer = {
+    _id: new mongoose.Types.ObjectId(),
+    evaluationStatus: 'COMPLETED',
+    evaluation: { topicAssessments: [{ skillKey: 'nosql', addressed: true, quality: 'missing' }] },
+  };
+  const silentAnswer = {
+    _id: new mongoose.Types.ObjectId(),
+    evaluationStatus: 'COMPLETED',
+    evaluation: { topicAssessments: [{ skillKey: 'javascript', addressed: false, quality: 'missing' }] },
+  };
+  const pendingAnswer = {
+    _id: new mongoose.Types.ObjectId(),
+    evaluationStatus: 'PENDING',
+    evaluation: { topicAssessments: [{ skillKey: 'mongodb', addressed: true, quality: 'good' }] },
+  };
+
+  // quality → signal mapping: missing 0, weak 1, good 2, strong 3 (docs/08 §2).
+  assert.deepEqual(evidenceNormalizer.QUALITY_SIGNAL, { missing: 0, weak: 1, good: 2, strong: 3 });
+  assert.deepEqual(
+    evidenceNormalizer.normalizeInterviewEvidence({ answers: [goodAnswer] }),
+    {
+      events: [{ skillKey: 'mongodb', signal: 2, answerIds: [goodAnswer._id.toString()] }],
+      potentialGaps: [],
+    },
+    'a single addressed good assessment → one event with signal 2'
+  );
+  assert.deepEqual(
+    evidenceNormalizer.normalizeInterviewEvidence({ answers: [goodAnswer, weakAnswer] }),
+    {
+      events: [{ skillKey: 'mongodb', signal: 1.5, answerIds: [goodAnswer._id.toString(), weakAnswer._id.toString()] }],
+      potentialGaps: [],
+    },
+    'same-skill assessments aggregate into ONE event per interview, averaged'
+  );
+  assert.deepEqual(
+    evidenceNormalizer.normalizeInterviewEvidence({ answers: [missingAnswer] }),
+    {
+      events: [{ skillKey: 'nosql', signal: 0, answerIds: [missingAnswer._id.toString()] }],
+      potentialGaps: ['nosql'],
+    },
+    'addressed:true + quality:missing is NEGATIVE evidence: signal 0 AND potentialGap (docs/08 §2, §9a)'
+  );
+  assert.deepEqual(
+    evidenceNormalizer.normalizeInterviewEvidence({ answers: [missingAnswer, weakAnswer] }),
+    {
+      events: [
+        { skillKey: 'nosql', signal: 0, answerIds: [missingAnswer._id.toString()] },
+        { skillKey: 'mongodb', signal: 1, answerIds: [weakAnswer._id.toString()] },
+      ],
+      potentialGaps: ['nosql'],
+    },
+    'a missing assessment alongside a weak-or-better one still yields signal 0 for it, but no gap flag for the skill with positive evidence'
+  );
+  assert.deepEqual(
+    evidenceNormalizer.normalizeInterviewEvidence({ answers: [goodAnswer, silentAnswer] }),
+    {
+      events: [{ skillKey: 'mongodb', signal: 2, answerIds: [goodAnswer._id.toString()] }],
+      potentialGaps: [],
+    },
+    'addressed:false is absolute silence — no event, no potentialGap (docs/08 §2 hard invariant)'
+  );
+  assert.deepEqual(
+    evidenceNormalizer.normalizeInterviewEvidence({ answers: [goodAnswer, pendingAnswer] }),
+    {
+      events: [{ skillKey: 'mongodb', signal: 2, answerIds: [goodAnswer._id.toString()] }],
+      potentialGaps: [],
+    },
+    'only COMPLETED answers contribute'
+  );
+  assert.deepEqual(
+    evidenceNormalizer.normalizeInterviewEvidence({ answers: [] }),
+    { events: [], potentialGaps: [] },
+    'an interview with no addressed evidence produces NOTHING — silence is not negative evidence'
+  );
+});
+
+test('M5.5-2. submit end-to-end: post-sync response, first-evidence profile state, zero extra AI calls', async () => {
+  const user = await m53Seed();
+  mock.enqueue(successItem(JSON.stringify(M53_4_QUESTIONS)));
+  const created = await interviewService.createInterview(user._id.toString(), {
+    targetRole: 'Backend Developer',
+    difficulty: 'medium',
+  });
+  await interviewService.startInterview(user._id.toString(), created._id.toString());
+  const q1 = created.questions[0]._id.toString();
+  const q2 = created.questions[1]._id.toString();
+  await interviewService.addAnswer(user._id.toString(), created._id.toString(), {
+    questionId: q1,
+    text: 'An index is a sorted structure the engine uses for fast lookups.',
+  });
+  await interviewService.addAnswer(user._id.toString(), created._id.toString(), {
+    questionId: q2,
+    text: 'A token bucket allows bursts up to its capacity, refilled at a fixed rate.',
+  });
+  mock.enqueue(successItem(JSON.stringify(M54_EVAL_MONGODB)), successItem(JSON.stringify(M54_EVAL_REST)));
+
+  const detail = await interviewService.submitInterview(user._id.toString(), created._id.toString());
+
+  // Post-sync response state (docs/02 §3): COMPLETED, mirrored by GET /:id.
+  assert.equal(detail.status, 'COMPLETED');
+  assert.equal(detail.report.profileSyncStatus, 'COMPLETED', 'the sync ran before the response was produced');
+  assert.deepEqual(detail, await interviewService.getInterview(user._id.toString(), created._id.toString()));
+  assert.equal(detail.report.skillSync.active, false, 'ACTIVE marker cleared by the transaction');
+  assert.ok(detail.report.skillSync.completedAt instanceof Date);
+  assert.equal(mock.calls.length, 3, 'the sync adds NO AI calls (normalization + transaction only)');
+
+  // First evidence (docs/08 §4): assessed flips, level BEGINNER unconditionally,
+  // sources gain INTERVIEW, one evidence event per skill with the averaged signal.
+  const fresh = await User.findById(user._id);
+  const byKey = new Map(fresh.currentSkillProfile.skills.map((skill) => [skill.skillKey, skill]));
+  const mongodb = byKey.get('mongodb');
+  assert.ok(mongodb, 'skill entry created from interview evidence');
+  assert.equal(mongodb.assessed, true);
+  assert.equal(mongodb.level, 'BEGINNER', 'first evidence is BEGINNER regardless of signal magnitude');
+  assert.equal(mongodb.potentialGap, false);
+  assert.deepEqual(mongodb.sources, ['INTERVIEW']);
+  assert.equal(mongodb.evidenceLog.length, 1);
+  assert.equal(mongodb.evidenceLog[0].signal, 2, 'quality:good → signal 2');
+  assert.equal(String(mongodb.evidenceLog[0].interviewId), created._id.toString());
+  assert.deepEqual(
+    mongodb.evidenceLog[0].answerIds.map(String),
+    [detail.answers[0]._id.toString()],
+    'answerIds reference the contributing answer'
+  );
+  assert.ok(mongodb.evidenceLog[0].assessedAt instanceof Date);
+  assert.ok(mongodb.lastAssessed instanceof Date);
+
+  const restApis = byKey.get('rest-apis');
+  assert.equal(restApis.assessed, true);
+  assert.equal(restApis.level, 'BEGINNER');
+  assert.equal(restApis.evidenceLog[0].signal, 1, 'quality:weak → signal 1');
+
+  const javascript = byKey.get('javascript');
+  assert.equal(javascript.assessed, false, 'resume-only skill untouched (no interview evidence this cycle)');
+  assert.equal(javascript.level, null);
+  assert.deepEqual(javascript.sources, ['RESUME']);
+
+  // No profile.targetRole on the seeded user → no catalog denominator → the
+  // gap list is recomputed empty, never a fabricated value (docs/08 §7 note).
+  assert.deepEqual(fresh.currentSkillProfile.skillGaps, []);
+
+  // Persisted marker state mirrors the response.
+  const stored = await Interview.findById(created._id);
+  assert.equal(stored.report.profileSyncStatus, 'COMPLETED');
+  assert.equal(stored.report.skillSync.active, false);
+});
+
+test('M5.5-3. idempotent re-invocation: evidence deduplicated by interviewId (docs/08 §9 retryability)', async () => {
+  const user = await m53Seed();
+  const { interview } = await m55CompletedFixture(user, {
+    evaluation: m55Eval('mongodb', { topicAssessments: [{ skillKey: 'mongodb', addressed: true, quality: 'good' }] }),
+  });
+
+  const first = await skillProfileService.updateFromInterview({
+    userId: user._id,
+    interviewId: interview._id,
+    events: [{ skillKey: 'mongodb', signal: 2, answerIds: [interview.answers[0]._id] }],
+    potentialGaps: [],
+  });
+  assert.equal(first.status, 'COMPLETED');
+  assert.equal(first.metrics.eventsApplied, 1);
+
+  const repeat = await skillProfileService.updateFromInterview({
+    userId: user._id,
+    interviewId: interview._id,
+    events: [{ skillKey: 'mongodb', signal: 2, answerIds: [interview.answers[0]._id] }],
+    potentialGaps: [],
+  });
+  assert.equal(repeat.status, 'COMPLETED', 're-applying the same interview evidence is a no-op');
+  assert.deepEqual(repeat.metrics, { eventsApplied: 0, skillsAssessed: 0, potentialGapsAdded: 0 });
+
+  const fresh = await User.findById(user._id);
+  const mongodb = fresh.currentSkillProfile.skills.find((skill) => skill.skillKey === 'mongodb');
+  assert.equal(mongodb.evidenceLog.length, 1, 'no duplicate evidence entry');
+  assert.equal(mongodb.level, 'BEGINNER');
+  assert.equal(mongodb.evidenceLog[0].signal, 2);
+});
+
+test('M5.5-4. first evidence unconditional BEGINNER + one-tier movement cap (docs/08 §4)', async () => {
+  const user = await m53Seed();
+
+  const first = await m55CompletedFixture(user, {
+    evaluation: m55Eval('mongodb', { topicAssessments: [{ skillKey: 'mongodb', addressed: true, quality: 'strong' }] }),
+  });
+  await skillProfileService.updateFromInterview({
+    userId: user._id,
+    interviewId: first.interview._id,
+    events: [{ skillKey: 'mongodb', signal: 3, answerIds: [first.interview.answers[0]._id] }],
+  });
+  const afterFirst = await User.findById(user._id);
+  assert.equal(
+    afterFirst.currentSkillProfile.skills.find((s) => s.skillKey === 'mongodb').level,
+    'BEGINNER',
+    'first evidence is BEGINNER even at signal 3 — unconditional (docs/08 §4)'
+  );
+
+  const second = await m55CompletedFixture(user, {
+    evaluation: m55Eval('mongodb', { topicAssessments: [{ skillKey: 'mongodb', addressed: true, quality: 'strong' }] }),
+  });
+  await skillProfileService.updateFromInterview({
+    userId: user._id,
+    interviewId: second.interview._id,
+    events: [{ skillKey: 'mongodb', signal: 3, answerIds: [second.interview.answers[0]._id] }],
+  });
+  let fresh = await User.findById(user._id);
+  assert.equal(
+    fresh.currentSkillProfile.skills.find((s) => s.skillKey === 'mongodb').level,
+    'INTERMEDIATE',
+    'rolling avg 3.0 targets ADVANCED but the one-tier cap allows only BEGINNER → INTERMEDIATE'
+  );
+
+  const third = await m55CompletedFixture(user, {
+    evaluation: m55Eval('mongodb', {
+      topicAssessments: [{ skillKey: 'mongodb', addressed: true, quality: 'missing' }],
+    }),
+  });
+  await skillProfileService.updateFromInterview({
+    userId: user._id,
+    interviewId: third.interview._id,
+    events: [{ skillKey: 'mongodb', signal: 0, answerIds: [third.interview.answers[0]._id] }],
+    potentialGaps: ['mongodb'],
+  });
+  fresh = await User.findById(user._id);
+  const mongodb = fresh.currentSkillProfile.skills.find((s) => s.skillKey === 'mongodb');
+  assert.equal(mongodb.level, 'INTERMEDIATE', 'rolling avg 2.0 still targets INTERMEDIATE — no tier change');
+  assert.equal(mongodb.potentialGap, true, 'missing-only assessment flags the at-risk neighborhood');
+  assert.equal(mongodb.evidenceLog.length, 3);
+});
+
+test('M5.5-5. rolling evidence window: max 5 events, FIFO drop, newest last (docs/08 §5)', async () => {
+  const user = await m53Seed();
+  const interviews = [];
+  for (let i = 0; i < 7; i += 1) {
+    const { interview } = await m55CompletedFixture(user, { evaluation: m55Eval('mongodb') });
+    interviews.push(interview);
+    await skillProfileService.updateFromInterview({
+      userId: user._id,
+      interviewId: interview._id,
+      events: [{ skillKey: 'mongodb', signal: i % 3, answerIds: [interview.answers[0]._id] }],
+    });
+  }
+  const fresh = await User.findById(user._id);
+  const mongodb = fresh.currentSkillProfile.skills.find((s) => s.skillKey === 'mongodb');
+  assert.equal(mongodb.evidenceLog.length, 5, 'only the latest 5 interview-level events are retained');
+  assert.deepEqual(
+    mongodb.evidenceLog.map((entry) => entry.signal),
+    [2, 0, 1, 2, 0],
+    'signals 0,1,2 of events 0,1,2 were dropped FIFO; the last 5 remain newest last'
+  );
+  assert.deepEqual(
+    mongodb.evidenceLog.map((entry) => String(entry.interviewId)),
+    interviews.slice(2).map((interview) => interview._id.toString()),
+    'the three oldest interview events were dropped, the two newest survive'
+  );
+});
+
+test('M5.5-6. potentialGap through the submit flow: missing ≡ at risk, blank ≡ silence', async () => {
+  const user = await m53Seed();
+  const { interview } = await m54InterviewFixture(user, {
+    answerSpecs: [{ questionIndex: 0, text: 'An index is a sorted structure.' }],
+  });
+  mock.enqueue(
+    successItem(
+      JSON.stringify(m55Eval('mongodb', { topicAssessments: [{ skillKey: 'mongodb', addressed: true, quality: 'missing' }] }))
+    )
+  );
+  const detail = await interviewService.submitInterview(user._id.toString(), interview._id.toString());
+  assert.equal(detail.status, 'COMPLETED');
+  assert.equal(detail.report.profileSyncStatus, 'COMPLETED');
+
+  const fresh = await User.findById(user._id);
+  const mongodb = fresh.currentSkillProfile.skills.find((s) => s.skillKey === 'mongodb');
+  assert.equal(mongodb.assessed, true, 'negative evidence still establishes the skill record');
+  assert.equal(mongodb.evidenceLog[0].signal, 0, 'missing contributes 0 to the average (docs/08 §2)');
+  assert.equal(mongodb.potentialGap, true, 'assessed-but-only-missing → at-risk neighborhood (docs/08 §9a)');
+
+  // Blank answers write addressed:false — absolute silence: no skill entry at
+  // all, no potentialGap (M5.4 contract, docs/08 §2 hard invariant).
+  const blankUser = await m53Seed();
+  const { interview: blankInterview } = await m54InterviewFixture(blankUser, {
+    answerSpecs: [{ questionIndex: 0, text: '   ' }],
+  });
+  await interviewService.submitInterview(blankUser._id.toString(), blankInterview._id.toString());
+  const blankFresh = await User.findById(blankUser._id);
+  assert.equal(
+    blankFresh.currentSkillProfile.skills.some((s) => s.skillKey === 'mongodb'),
+    false,
+    'silence is not negative evidence — no entry, no gap flag'
+  );
+  assert.equal(blankFresh.currentSkillProfile.skillGaps.filter((g) => g === 'mongodb').length, 0);
+});
+
+test('M5.5-7. sync markers: BUSY while active, EXPIRED when stale, FAILED via marker write (docs/08 §9a)', async () => {
+  const user = await m53Seed();
+
+  // Post-sync read without markers remaining → the persisted status.
+  const { interview } = await m55CompletedFixture(user, { evaluation: m55Eval('mongodb') });
+  const id = interview._id.toString();
+  await skillProfileService.updateFromInterview({
+    userId: user._id,
+    interviewId: interview._id,
+    events: [{ skillKey: 'mongodb', signal: 2, answerIds: [interview.answers[0]._id] }],
+  });
+  assert.deepEqual(await skillProfileService.getSyncStatus(user._id, id), { status: 'COMPLETED' });
+
+  // Fresh ACTIVE marker → BUSY. Construct a coherent unfinished-marker state
+  // (no completedAt/failedAt — the real sync clears/rolls those back together).
+  await Interview.updateOne(
+    { _id: interview._id },
+    {
+      $set: {
+        'report.skillSync.active': true,
+        'report.skillSync.startedAt': new Date(Date.now() - 1000),
+        'report.skillSync.completedAt': null,
+        'report.skillSync.failedAt': null,
+      },
+    }
+  );
+  assert.deepEqual(await skillProfileService.getSyncStatus(user._id, id), { status: 'BUSY' }, 'in-flight sync answers BUSY');
+
+  // Stale ACTIVE marker (older than SYNC_MARKER_STALE_MS) → EXPIRED.
+  await Interview.updateOne(
+    { _id: interview._id },
+    { $set: { 'report.skillSync.startedAt': new Date(Date.now() - 11 * 60 * 1000) } }
+  );
+  assert.deepEqual(await skillProfileService.getSyncStatus(user._id, id), { status: 'EXPIRED' }, 'crashed sync answers EXPIRED');
+
+  // Restore a coherent completed-marker state before the downgrade check.
+  await Interview.updateOne(
+    { _id: interview._id },
+    {
+      $set: {
+        'report.skillSync.active': false,
+        'report.skillSync.completedAt': new Date(),
+        'report.skillSync.failedAt': null,
+      },
+    }
+  );
+
+  // FAILED via the marker write (never downgrades a COMPLETED sync).
+  const pending = await m54InterviewFixture(user, { answerSpecs: [{ questionIndex: 0, text: 'x' }] });
+  await skillProfileService.markSyncFailed(user._id, pending.interview._id, new Error('test failure'));
+  assert.deepEqual(await skillProfileService.getSyncStatus(user._id, pending.interview._id.toString()), {
+    status: 'FAILED',
+  });
+  const failedDoc = await Interview.findById(pending.interview._id);
+  assert.equal(failedDoc.report.skillSync.reason, 'Error', 'sanitized reason: error name, never raw text');
+
+  await skillProfileService.markSyncFailed(user._id, id, new Error('late failure'));
+  assert.deepEqual(await skillProfileService.getSyncStatus(user._id, id), { status: 'COMPLETED' }, 'never downgrades COMPLETED');
+
+  // Ownership: someone else's interview → 404.
+  const other = await m53Seed();
+  await assert.rejects(
+    skillProfileService.getSyncStatus(other._id, id),
+    (err) => err.code === 'NOT_FOUND'
+  );
+});
+
+test('M5.5-8. sync failure atomicity: transaction rolls back, FAILED marker, submission stays COMPLETED (docs/08 §9/§9a)', async () => {
+  const user = await m53Seed();
+  const { interview } = await m54InterviewFixture(user, {
+    answerSpecs: [{ questionIndex: 0, text: 'An index is a sorted structure the engine uses for fast lookups.' }],
+  });
+  mock.enqueue(successItem(JSON.stringify(M54_EVAL_MONGODB)));
+
+  // Persistence failure INSIDE the transaction: user.save succeeds, then the
+  // interview.save({ session }) write throws → the transaction aborts and the
+  // profile update must roll back with it.
+  const originalSave = Interview.prototype.save;
+  Interview.prototype.save = async function failInterviewSave() {
+    throw new Error('simulated persistence failure');
+  };
+
+  let detail;
+  try {
+    detail = await interviewService.submitInterview(user._id.toString(), interview._id.toString());
+  } finally {
+    Interview.prototype.save = originalSave;
+  }
+
+  assert.equal(detail.status, 'COMPLETED', 'a sync failure never degrades the interview');
+  assert.equal(typeof detail.report.overallScore, 'number', 'the completed report is retained');
+  assert.equal(detail.report.profileSyncStatus, 'FAILED', 'the response reflects the FAILED sync (docs/02 §3)');
+  assert.ok(detail.report.skillSync.failedAt instanceof Date);
+  assert.equal(detail.report.skillSync.active, false);
+  assert.equal(detail.report.skillSync.reason, 'Error', 'sanitized failure reason persisted');
+
+  const fresh = await User.findById(user._id);
+  assert.equal(
+    fresh.currentSkillProfile.skills.some((s) => s.skillKey === 'mongodb'),
+    false,
+    'the profile update rolled back — no evidence applied despite the failed marker'
+  );
+  assert.deepEqual(fresh.currentSkillProfile.skillGaps, ['kubernetes'], 'seeded gaps untouched by the rollback');
+
+  const stored = await Interview.findById(interview._id);
+  assert.equal(stored.status, 'COMPLETED');
+  assert.equal(stored.report.profileSyncStatus, 'FAILED', 'GET /:id mirrors the FAILED state');
+  assert.equal(stored.report.overallScore, 73, '0.5×80 + 0.3×70 + 0.2×60 — answer evaluation persisted normally');
+});
+
+test('M5.5-9. catalog-driven skillGaps recompute inside the transaction (docs/08 §7)', async () => {
+  const user = await m53Seed();
+  await User.updateOne(
+    { _id: user._id },
+    { $set: { profile: { targetRole: 'Backend Developer', experienceLevel: 'Junior' } } }
+  );
+  mock.enqueue(successItem(JSON.stringify(M54_EVAL_MONGODB)));
+  const { interview } = await m54InterviewFixture(user, {
+    answerSpecs: [{ questionIndex: 0, text: 'An index is a sorted structure the engine uses for fast lookups.' }],
+  });
+
+  const detail = await interviewService.submitInterview(user._id.toString(), interview._id.toString());
+  assert.equal(detail.status, 'COMPLETED');
+  assert.equal(detail.report.profileSyncStatus, 'COMPLETED');
+
+  const fresh = await User.findById(user._id);
+  // Catalog: javascript (INTERMEDIATE min, now assessed BEGINNER → still a
+  // gap), nodejs (INTERMEDIATE min, absent → gap). mongodb is not a required
+  // skill of this role, so it contributes nothing to the gap list.
+  assert.deepEqual(fresh.currentSkillProfile.skillGaps, ['javascript', 'nodejs'], 'catalog order preserved');
+  const javascript = fresh.currentSkillProfile.skills.find((s) => s.skillKey === 'javascript');
+  assert.equal(javascript.assessed, false, 'resume-only skill stays unassessed without its own interview evidence');
+});
+
+test('M5.5-10. interview detail exposes the post-sync report state on the SAME document', async () => {
+  const user = await m53Seed();
+  mock.enqueue(successItem(JSON.stringify(M54_EVAL_MONGODB)));
+  const { interview } = await m54InterviewFixture(user, {
+    answerSpecs: [{ questionIndex: 0, text: 'An index is a sorted structure the engine uses for fast lookups.' }],
+  });
+
+  const detail = await interviewService.submitInterview(user._id.toString(), interview._id.toString());
+  const viaGet = await interviewService.getInterview(user._id.toString(), interview._id.toString());
+  assert.deepEqual(detail, viaGet, 'submit response == GET /:id — both post-sync');
+  assert.equal(viaGet.report.profileSyncStatus, 'COMPLETED');
+  assert.deepEqual(
+    await skillProfileService.getSyncStatus(user._id, interview._id.toString()),
+    { status: 'COMPLETED' },
+    'service-level sync read agrees with the report field'
+  );
+});
+
+test('M5.5-11. boundary purity: normalizer is persistence-free, service uses transactions only', () => {
+  const fs = require('node:fs');
+  const pathNode = require('node:path');
+
+  const normalizer = fs.readFileSync(pathNode.join(__dirname, '..', 'src', 'domain', 'skills', 'evidenceNormalizer.js'), 'utf8');
+  for (const term of ["require('mongoose')", "require('mongodb')", "require('http')", "require('../../ai", "require('../modules", 'orchestrator', 'supabase']) {
+    assert.ok(!normalizer.includes(term), `evidenceNormalizer.js must not import/use: ${term}`);
+  }
+  assert.ok(normalizer.includes('QUALITY_SIGNAL'), 'exposes the docs/08 §2 mapping');
+
+  const service = fs.readFileSync(pathNode.join(__dirname, '..', 'src', 'modules', 'analytics', 'skillProfile.service.js'), 'utf8');
+  assert.ok(service.includes('startSession') && service.includes('withTransaction'), 'transactional update (AGENTS.md rule 9)');
+  assert.ok(service.includes('markSyncFailed') && service.includes('getSyncStatus'), 'FAILED-marker + BUSY/EXPIRED reads exposed');
+  for (const term of ['supabase', 'multer', 'busboy', "require('../../ai", "require('http')"]) {
+    assert.ok(!service.includes(term), `skillProfile.service.js must not reference: ${term}`);
+  }
+});
+
+test('M5.5-12. git state: clean tree, M5.5 implementation commit in history', async () => {
+  const { execSync } = require('node:child_process');
+  const status = execSync('git status --short', { encoding: 'utf8', cwd: REPO_ROOT });
+  assert.equal(status.trim(), '', `working tree must be clean: ${status}`);
+  const ancestor = execSync('git merge-base --is-ancestor 3567734 HEAD && echo yes || echo no', {
+    encoding: 'utf8',
+    cwd: REPO_ROOT,
+  }).trim();
+  assert.equal(ancestor, 'yes', 'M5.5 implementation commit 3567734 must be an ancestor of HEAD');
 });
