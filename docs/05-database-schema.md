@@ -181,7 +181,8 @@ No `refreshtokens` collection — final auth decision is stateless short-lived J
       type: String,                // NOT a top-level Interview field. Independent of
       enum: ['PENDING', 'COMPLETED', 'FAILED'],  // Interview.status: an interview can be
       default: 'PENDING'           // COMPLETED while its skill-profile sync is still
-    }                               // PENDING or retrying after a FAILED attempt.
+    }                               // PENDING or FAILED — FAILED is terminal for MVP
+                                    // (docs/08 §9): no retry, no re-processing in MVP.
   },
 
   startedAt: Date,

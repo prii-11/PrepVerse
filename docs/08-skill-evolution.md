@@ -228,6 +228,10 @@ COMPLETED or FAILED
 
 A profile-sync failure does **not** invalidate the completed interview. It is a derived-state failure and must be retryable.
 
+**FAILED semantics (M5.5 resolution):** `profileSyncStatus: FAILED` is **terminal for MVP**. There is no automatic retry, no retry-on-read, and no retry endpoint. The completed interview and its report remain valid; the FAILED flag means only that skill-profile synchronization did not complete. "Retryable" means re-invocation is safe (evidence is deduplicated by interviewId), so a future milestone may add explicit re-processing — it does not require a retry mechanism in MVP.
+
+**Caller behavior on sync failure (M5.5 resolution):** the interview submission flow invokes synchronization synchronously after the COMPLETED write (docs/05 §7). If it throws, the caller preserves `Interview.status = COMPLETED` and the completed report, marks `report.profileSyncStatus = FAILED` via a best-effort write (the synchronization transaction has already rolled back — this write is not part of it), and does not convert the interview to `EVALUATION_FAILED`. The submission remains a successful completion from the interview's perspective. If the caller's separate FAILED-marker write itself fails after `updateFromInterview()` has already rolled back, the interview may remain observably `profileSyncStatus = PENDING` indefinitely; this is an accepted MVP limitation and does not introduce a separate recovery mechanism.
+
 ---
 
 ## §10. Explicitly Deferred
