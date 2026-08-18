@@ -87,7 +87,7 @@ No `refreshtokens` collection — final auth decision is stateless short-lived J
     strengths: [String],
     skillGaps: [String],
     promptVersion: String,     // e.g. "resume-analysis-v1"
-    model: String              // e.g. "gemini-2.5-flash"
+    model: String              // e.g. "gemini-3.6-flash"
   },
 
   failureReason: String,       // set only if status: FAILED — errorCode, not raw model output
@@ -244,6 +244,14 @@ This is a small, manually curated seed collection (a handful of common roles: Ba
   provider: { type: String, default: 'gemini' },
   model: String,
   promptVersion: String,
+
+  // M5.7 chain-link provenance (docs/16 §7) — one document PER AI CALL, so a
+  // failover chain is reconstructible: attempt is the 1-based ordinal,
+  // fallbackFrom is the "provider/model" candidate the attempt came from
+  // (null for the chain head), fallbackReason the failure category that left it.
+  attempt: Number,
+  fallbackFrom: String,
+  fallbackReason: String,
 
   status: { type: String, enum: ['SUCCESS', 'FAILED'] },
   latencyMs: Number,

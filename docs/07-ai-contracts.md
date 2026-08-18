@@ -1,6 +1,6 @@
 # PrepVerse — Design Doc 7: AI Architecture & Prompt Contracts
 
-*Incorporates: Supabase Storage as object-storage-only, revised readiness formula with cold-start handling, stateless short-lived JWT (final), sanitized AIExecution logging. Provider: Gemini 2.5 Flash, free tier.*
+*Incorporates: Supabase Storage as object-storage-only, revised readiness formula with cold-start handling, stateless short-lived JWT (final), sanitized AIExecution logging. Provider: Gemini 3.6 Flash, free tier.*
 
 ---
 
@@ -178,6 +178,7 @@ Return a JSON object with this exact shape: { schema }
 Question: {question.text}
 Category: {question.category}
 Expected topics: {question.expectedTopics.map(t => `${t.skillKey}: ${t.topic}`).join(', ')}
+Each topicAssessments[].skillKey must be copied EXACTLY from one of the expected-topic skillKeys above (the key before the colon) — never include the topic text, the colon, or any other explanation.
 Candidate's target role: {candidateProfile.targetRole}
 Candidate's experience level: {candidateProfile.experienceLevel}
 
@@ -242,7 +243,9 @@ overallScore       = average across included answers of (0.50×correctness + 0.3
 - Post-validation sanity check: if `correctness === 100` and `candidateAnswer` is suspiciously short (e.g. under 20 characters) relative to the question's expected topics, flag the `AIExecution` record for review rather than blocking it outright (false positives on legitimately short-but-correct answers are possible) — this is a soft signal, not a hard gate, since we can't perfectly distinguish injection from a genuinely excellent terse answer
 
 ### Prompt version
-`answer-evaluation-v1`
+`answer-evaluation-v2`
+
+(Amendment v1→v2, Option-B gap resolution: added the explicit skillKey-mapping sentence to the user-content template — the relationship between the rendered `key: topic` pairs and `topicAssessments[].skillKey` is now stated rather than implied. Semantics unchanged: the Zod subset validation remains the enforcement point.)
 
 ---
 
@@ -268,6 +271,8 @@ Call Gemini
                                  Interview.questionGeneration.status = FAILED,
                                  or per-answer evaluation failure)
 ```
+
+**M5.7 amendment — provider failover (see `docs/16-ai-failover.md` for the full contract):** the flowchart above is unchanged for a single-provider deployment (the default). With a multi-provider chain configured, availability failures — an exhausted 429 backoff on a candidate, `QUOTA_EXHAUSTED`, provider 5xx/unavailability, or timeout — move the operation to the next candidate in the configured chain (same provider's alternate models first, then the next provider) under the `AI_MAX_TOTAL_ATTEMPTS` hard cap. The correction path and all non-availability failures (`SCHEMA_VALIDATION_FAILED`, invalid-request, authentication, unclassified) NEVER switch providers — they are contract/application defects, not availability events. Every attempt persists its own `AIExecution` row with `attempt`, `fallbackFrom`, and `fallbackReason` (docs/05 §6), so a failover chain is fully reconstructible.
 
 ---
 

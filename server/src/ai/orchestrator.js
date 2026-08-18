@@ -1,20 +1,46 @@
-// AI Orchestrator (M5.1 §6-§22). The ONLY layer allowed to call the Gemini
-// provider; future operation modules (ResumeAnalyzer M5.2, QuestionGenerator
-// M5.3, AnswerEvaluator M5.4) call `orchestrator.run('RESUME_ANALYSIS', ...)`
-// and never touch the provider directly (AGENTS.md rule 1).
+// AI Orchestrator (M5.1 §6-§22, M5.7 AI failover). The ONLY layer allowed to
+// call AI providers (AGENTS.md rule 1); future operation modules
+// (ResumeAnalyzer M5.2, QuestionGenerator M5.3, AnswerEvaluator M5.4) call
+// `orchestrator.run('RESUME_ANALYSIS', ...)` and never touch a provider
+// directly.
 //
-// The orchestrator owns: provider selection, 429 retry/backoff, JSON
-// extraction, schema validation, correction retry, post-validation
-// sanitization, AIExecution logging, and sanitized failure handling.
+// The orchestrator owns: candidate selection (provider registry), 429
+// retry/backoff, provider failover, JSON extraction, schema validation,
+// correction retry, post-validation sanitization, AIExecution logging (one
+// row per candidate attempt), and sanitized failure handling.
 //
 // It deliberately contains NO domain logic (M5.1 §21): it never sets
 // Resume.status, Interview.status, User.currentSkillProfile, or
-// Interview.report. It produces a validated AI result plus an AIExecution
-// audit record and nothing else.
+// Interview.report. It produces a validated AI result plus AIExecution audit
+// records and nothing else.
+//
+// M5.7 failover policy (docs/16-ai-failover.md — the milestone contract):
+//   - Candidates come from the provider registry, ordered by configured
+//     priority (same-provider alternate models before cross-provider).
+//   - failover-eligible failures (QUOTA_EXHAUSTED, RATE_LIMITED,
+//     PROVIDER_UNAVAILABLE, TIMEOUT) move the request to the next candidate
+//     IMMEDIATELY; quota/rate failures additionally mark the candidate in the
+//     in-process health store so concurrent requests skip it.
+//   - RATE_LIMITED keeps the frozen docs/07 §5 same-candidate backoff
+//     (1s, 2s, 4s, max 3 attempts). QUOTA_EXHAUSTED never gets a repeated
+//     retry against the exhausted candidate.
+//   - Contract failures (malformed JSON, schema validation, INVALID_REQUEST,
+//     AUTHENTICATION_FAILED, UNKNOWN, application bugs) NEVER trigger provider
+//     failover — they end the operation (schema failures follow the existing
+//     single-correction-retry policy). Provider failover is for provider
+//     capacity/availability problems, not for hiding application defects.
 const { AI_CONFIG } = require('../config/ai');
-const geminiProvider = require('./providers/gemini');
+const providerRegistry = require('./providers/registry');
+const health = require('./health');
 const AIExecution = require('./aiExecution.model');
 const { AIProviderError, ValidationError } = require('../utils/errors');
+const {
+  CATEGORIES,
+  isFailoverEligible,
+  errorCodeFor,
+  SCHEMA_VALIDATION_FAILED,
+  NO_ELIGIBLE_PROVIDER,
+} = require('./providers/classify');
 const { resumeAnalysisSchema, sanitizeResumeAnalysis } = require('./schemas/resumeAnalysis.schema');
 const {
   createQuestionGenerationSchema,
@@ -96,7 +122,7 @@ const OPERATION_REGISTRY = {
 
   ANSWER_EVALUATION: {
     entityType: 'INTERVIEW',
-    promptVersion: 'answer-evaluation-v1',
+    promptVersion: 'answer-evaluation-v2',
     getSchema(input) {
       // docs/07 §4 input contract requires the question's expectedTopics — the
       // subset/unique/non-empty rules (docs/07 §3) are enforced against them.
@@ -191,9 +217,9 @@ function extractJSON(text) {
   }
 }
 
-// M5.1 §14 correction prompt — explicitly tells Gemini the previous response
-// was rejected and asks for a corrected response matching the contract. No
-// stack traces, no raw user content, no secrets.
+// M5.1 §14 correction prompt — explicitly tells the model the previous
+// response was rejected and asks for a corrected response matching the
+// contract. No stack traces, no raw user content, no secrets.
 function buildCorrectionPrompt(config, originalPrompt) {
   return `${originalPrompt}\n\nYour previous response did not match the required schema. Return ONLY valid JSON matching this shape:\n${config.schemaDescription}`;
 }
@@ -214,20 +240,73 @@ function assertValidPayload(payload) {
   }
 }
 
+// Normalize ANY provider-caught error into a provider-neutral category.
+// Adapters surface AIProviderError with details.category; legacy/mocked
+// errors (and defensive gaps) are derived from the pre-M5.7 contract fields
+// (retryable ⇔ 429-family, upstream status) so existing behavior is preserved.
+function classifyProviderError(error) {
+  if (error instanceof AIProviderError) {
+    if (error.details?.category) return error.details.category;
+    if (error.details?.retryable === true) return CATEGORIES.RATE_LIMITED;
+    const status = error.details?.upstreamStatus;
+    if (typeof status === 'number' && status >= 500 && status <= 599) return CATEGORIES.PROVIDER_UNAVAILABLE;
+    if (typeof status === 'number') return CATEGORIES.INVALID_REQUEST;
+    return CATEGORIES.UNKNOWN;
+  }
+  return CATEGORIES.UNKNOWN;
+}
+
+function candidateLabel(candidate) {
+  return `${candidate.provider}/${candidate.model}`;
+}
+
+// Final contract failure (docs/07 §5 correction budget exhausted): malformed
+// JSON or schema-validated output that STAYS invalid gets one FAILED
+// AIExecution row and a typed SCHEMA_VALIDATION_FAILED — provider failover is
+// deliberately NOT triggered (docs/16-ai-failover.md §Non-failover: it would
+// hide a shared prompt/schema bug).
+async function failContractValidation({ operation, config, payload, startedAt, candidate, attempts, previousCandidate, previousCategory }) {
+  const latencyMs = Date.now() - startedAt;
+  await logExecution({
+    operation,
+    config,
+    payload,
+    provider: candidate.provider,
+    model: candidate.model,
+    attempt: attempts,
+    fallbackFrom: previousCandidate,
+    fallbackReason: previousCategory,
+    status: 'FAILED',
+    errorCode: SCHEMA_VALIDATION_FAILED,
+    latencyMs,
+    outputSummary: { validationPassed: false, errorCode: SCHEMA_VALIDATION_FAILED, attempts },
+  });
+  throw new AIProviderError('AI provider request failed after retries were exhausted', {
+    failure: SCHEMA_VALIDATION_FAILED,
+    attempts,
+  });
+}
+
 // AIExecution is the orchestrator's responsibility (M5.1 §15), not the
-// provider's or a domain service's. outputSummary is always a sanitized
-// structured summary (M5.1 §16, docs/06 §4.3) — never raw prompts, resume
-// text, answer text, API keys, or unrestricted model output.
-async function logExecution({ operation, config, payload, status, errorCode, latencyMs, tokenUsage, outputSummary }) {
+// provider's or a domain service's. One row PER CANDIDATE ATTEMPT (M5.7 —
+// docs/05 §6 "one document per AI call"), so a failover chain leaves a
+// complete, reconstructible trace: provider/model per attempt, failure
+// category, fallback link, and the final producer. outputSummary is always a
+// sanitized structured summary (M5.1 §16, docs/06 §4.3) — never raw prompts,
+// resume text, answer text, API keys, or unrestricted model output.
+async function logExecution({ operation, config, payload, provider, model, attempt, fallbackFrom, fallbackReason, status, errorCode, latencyMs, tokenUsage, outputSummary }) {
   try {
     await AIExecution.create({
       userId: payload.userId,
       operation,
       entityType: config.entityType,
       entityId: payload.entityId ?? undefined,
-      provider: 'gemini',
-      model: AI_CONFIG.model,
+      provider,
+      model,
       promptVersion: config.promptVersion,
+      attempt,
+      fallbackFrom,
+      fallbackReason,
       status,
       latencyMs,
       tokenUsage,
@@ -243,7 +322,7 @@ async function logExecution({ operation, config, payload, status, errorCode, lat
 }
 
 /**
- * Run one AI operation through the full pipeline (M5.1 §7):
+ * Run one AI operation through the full pipeline (M5.1 §7, M5.7):
  *
  *   payload = {
  *     userId,                 // required — AIExecution.userId
@@ -253,7 +332,8 @@ async function logExecution({ operation, config, payload, status, errorCode, lat
  *   }
  *
  * Returns { result, execution } on success; throws AIProviderError (502) after
- * retries are exhausted. Only the orchestrator may call the Gemini provider.
+ * the candidate chain or the attempt budget is exhausted. Only the
+ * orchestrator may call AI providers.
  */
 async function run(operation, payload) {
   const config = OPERATION_REGISTRY[operation];
@@ -268,101 +348,278 @@ async function run(operation, payload) {
   const startedAt = Date.now();
   let attempts = 0;
   let correctionsUsed = 0;
-  let promptText = payload.prompt;
+  let previousCandidate = null; // "provider/model" label the chain came from
+  let previousCategory = null; // that candidate's failure category
+  let lastProviderError = null;
+  let candidatesTried = 0;
 
-  const failOperation = async (errorCode, providerError) => {
+  // Candidate chain (ordered by configured priority, filtered by operation
+  // capability, health state, and configuration validity). failoverEnabled
+  // reduces the chain to the first candidate — the exact pre-M5.7 behavior.
+  const eligibleCandidates = providerRegistry.getCandidates(operation);
+  const candidates = AI_CONFIG.failoverEnabled ? eligibleCandidates : eligibleCandidates.slice(0, 1);
+
+  if (candidates.length === 0) {
     const latencyMs = Date.now() - startedAt;
     await logExecution({
       operation,
       config,
       payload,
       status: 'FAILED',
-      errorCode,
+      errorCode: NO_ELIGIBLE_PROVIDER,
       latencyMs,
-      outputSummary: { validationPassed: false, errorCode, attempts },
+      outputSummary: { validationPassed: false, errorCode: NO_ELIGIBLE_PROVIDER, attempts },
     });
-    throw new AIProviderError('AI provider request failed after retries were exhausted', {
-      failure: errorCode,
+    throw new AIProviderError('No eligible AI provider/model is configured for this operation', {
+      failure: NO_ELIGIBLE_PROVIDER,
       attempts,
-      upstreamStatus: providerError?.details?.upstreamStatus ?? null,
     });
-  };
-
-  // Retry policy (docs/07 §5; M5.1 §12-§13):
-  //  - 429 → backoff (1s, 2s, 4s), max 3 total attempts. Only the first two
-  //    delays are consumed before attempt 3.
-  //  - malformed JSON / schema failure → retry ONCE with a correction prompt
-  //    (max 2 total attempts), tracked independently of the 429 budget so the
-  //    two policies never multiply: a 429 on a correction attempt re-sends
-  //    the correction prompt, it does not grant a fresh correction credit.
-  while (true) {
-    let providerResult;
-    try {
-      providerResult = await geminiProvider.generate(promptText);
-    } catch (error) {
-      attempts += 1;
-      const isRetryable = error instanceof AIProviderError && error.details?.retryable === true;
-      if (isRetryable && attempts < AI_CONFIG.maxAttempts) {
-        const delayMs =
-          AI_CONFIG.rateLimitRetryDelaysMs[Math.min(attempts - 1, AI_CONFIG.rateLimitRetryDelaysMs.length - 1)];
-        await sleep(delayMs);
-        continue;
-      }
-      return failOperation(isRetryable ? 'RATE_LIMITED' : 'AI_PROVIDER_FAILED', error);
-    }
-    attempts += 1;
-
-    // JSON extraction first (docs/07 §1), then schema validation. Both feed
-    // the same single correction-retry budget (M5.1 §8, §13).
-    const json = extractJSON(providerResult.text);
-    if (json === null) {
-      if (correctionsUsed < AI_CONFIG.maxCorrectionRetries) {
-        correctionsUsed += 1;
-        promptText = buildCorrectionPrompt(config, payload.prompt);
-        continue;
-      }
-      return failOperation('SCHEMA_VALIDATION_FAILED');
-    }
-
-    const parsed = schema.safeParse(json);
-    if (!parsed.success) {
-      if (correctionsUsed < AI_CONFIG.maxCorrectionRetries) {
-        correctionsUsed += 1;
-        promptText = buildCorrectionPrompt(config, payload.prompt);
-        continue;
-      }
-      return failOperation('SCHEMA_VALIDATION_FAILED');
-    }
-
-    // Post-validation sanitization (M5.1 §11): runs ONLY on schema-valid
-    // output. Invalid output never reaches this line — it already failed and
-    // either retried or exhausted the operation.
-    const result = config.sanitize(parsed.data);
-    const latencyMs = Date.now() - startedAt;
-
-    await logExecution({
-      operation,
-      config,
-      payload,
-      status: 'SUCCESS',
-      latencyMs,
-      tokenUsage: providerResult.tokenUsage,
-      outputSummary: config.buildOutputSummary(result, payload.input),
-    });
-
-    return {
-      result,
-      execution: {
-        operation,
-        provider: 'gemini',
-        model: AI_CONFIG.model,
-        promptVersion: config.promptVersion,
-        attempts,
-        correctionsUsed,
-        latencyMs,
-      },
-    };
   }
+
+  // Retry vs failover policy (docs/07 §5 preserved; docs/16-ai-failover.md):
+  //  - RATE_LIMITED → same-candidate backoff (1s, 2s, 4s), max 3 attempts,
+  //    then fail over to the next candidate.
+  //  - QUOTA_EXHAUSTED / PROVIDER_UNAVAILABLE / TIMEOUT → fail over
+  //    immediately (quota never gets a repeated retry on the exhausted
+  //    candidate).
+  //  - Schema/JSON failure → retry ONCE with a correction prompt on the SAME
+  //    candidate (model-specific context), then hard failure. NEVER failover.
+  //  - Non-failover provider failures → immediate hard failure, no switch.
+  //  - maxTotalAttempts bounds total provider calls across the whole chain.
+  for (let i = 0; i < candidates.length && attempts < AI_CONFIG.maxTotalAttempts; i += 1) {
+    const candidate = candidates[i];
+    candidatesTried += 1;
+    let sameCandidateRetries = 0;
+    // The correction context belongs to the model that actually responded —
+    // each candidate starts from the original prompt, never a stale correction
+    // aimed at a failed candidate.
+    let promptText = payload.prompt;
+
+    while (true) {
+      const attemptStartedAt = Date.now();
+
+      // Chain-link provenance: an attempt's row records the candidate it CAME
+      // FROM. Captured before any failure handling — a candidate's own failure
+      // rows reference its predecessor, and the link advances only when the
+      // request actually moves to the next candidate.
+      let cameFrom = previousCandidate;
+      let cameReason = previousCategory;
+
+      let providerResult;
+      try {
+        providerResult = await candidate.adapter.generate(promptText, { model: candidate.model });
+        attempts += 1;
+      } catch (error) {
+        attempts += 1;
+        lastProviderError = error;
+        const attemptLatencyMs = Date.now() - attemptStartedAt;
+        const category = classifyProviderError(error);
+        const code = errorCodeFor(category);
+        // cameFrom/cameReason above are captured pre-call (chain-link rows).
+
+        // The 429 retry gate (docs/07 §5 preserved): backoff, max 3 attempts
+        // on the same candidate. The attempt budget is a hard cap — a spent
+        // budget ends the operation rather than queueing more calls.
+        const retryAllowed =
+          category === CATEGORIES.RATE_LIMITED && sameCandidateRetries < AI_CONFIG.maxAttempts - 1 && attempts < AI_CONFIG.maxTotalAttempts;
+
+        if (retryAllowed) {
+          sameCandidateRetries += 1;
+          // Fire-and-forget: the audit write must never gate the retry loop —
+          // B1-style fake-timer tests advance the clock with microtask ticks,
+          // and an awaited DB write inside the backoff window deadlocks them
+          // (logExecution swallows persistence errors internally).
+          void logExecution({
+            operation,
+            config,
+            payload,
+            provider: candidate.provider,
+            model: candidate.model,
+            attempt: attempts,
+            fallbackFrom: cameFrom,
+            fallbackReason: cameReason,
+            status: 'FAILED',
+            errorCode: code,
+            latencyMs: attemptLatencyMs,
+            outputSummary: { validationPassed: false, errorCode: code, category, attempts },
+          });
+          await sleep(
+            AI_CONFIG.rateLimitRetryDelaysMs[
+              Math.min(sameCandidateRetries - 1, AI_CONFIG.rateLimitRetryDelaysMs.length - 1)
+            ]
+          );
+          continue;
+        }
+
+        if (isFailoverEligible(category)) {
+          // Mark the candidate in the shared health store so OTHER in-flight
+          // requests stop selecting it during the cooldown window (quota: long,
+          // rate limit: short). Only meaningful when a fallback exists: with a
+          // single candidate, marking would blind the only route and fail fast
+          // with NO_ELIGIBLE_PROVIDER instead of retrying the same provider.
+          if (candidates.length > 1) {
+            if (category === CATEGORIES.QUOTA_EXHAUSTED) {
+              health.markQuotaExhausted(candidate.provider, candidate.model);
+            } else if (category === CATEGORIES.RATE_LIMITED) {
+              health.markRateLimited(candidate.provider, candidate.model);
+            }
+          }
+          previousCandidate = candidateLabel(candidate);
+          previousCategory = category;
+          // The last row IS the run's terminal record — persist it
+          // deterministically so a rejected run is auditable the moment it
+          // rejects (no duplicate row: the post-loop path throws only).
+          // Mid-chain rows stay fire-and-forget so the backoff window of the
+          // NEXT candidate is not gated on a DB write.
+          const auditPromise = logExecution({
+            operation,
+            config,
+            payload,
+            provider: candidate.provider,
+            model: candidate.model,
+            attempt: attempts,
+            fallbackFrom: cameFrom,
+            fallbackReason: cameReason,
+            status: 'FAILED',
+            errorCode: code,
+            latencyMs: attemptLatencyMs,
+            outputSummary: { validationPassed: false, errorCode: code, category, attempts },
+          });
+          const isTerminal = i === candidates.length - 1 || attempts >= AI_CONFIG.maxTotalAttempts;
+          if (isTerminal) await auditPromise;
+          else void auditPromise;
+          break;
+        }
+
+        // Non-failover failure — application/contract/config defect or an
+        // ambiguous signal. NO provider switch, immediate final failure
+        // (terminal by construction → persisted before the throw).
+        await logExecution({
+          operation,
+          config,
+          payload,
+          provider: candidate.provider,
+          model: candidate.model,
+          attempt: attempts,
+          fallbackFrom: cameFrom,
+          fallbackReason: cameReason,
+          status: 'FAILED',
+          errorCode: code,
+          latencyMs: attemptLatencyMs,
+          outputSummary: { validationPassed: false, errorCode: code, category, attempts },
+        });
+        throw new AIProviderError('AI provider request failed', {
+          failure: code,
+          attempts,
+          category,
+          upstreamStatus: error.details?.upstreamStatus ?? null,
+        });
+      }
+
+      // JSON extraction first (docs/07 §1), then schema validation. Both feed
+      // the same single correction-retry budget (M5.1 §8, §13) and NEVER
+      // trigger provider failover.
+      const json = extractJSON(providerResult.text);
+      if (json === null) {
+        if (correctionsUsed < AI_CONFIG.maxCorrectionRetries && attempts < AI_CONFIG.maxTotalAttempts) {
+          correctionsUsed += 1;
+          // Per-attempt audit: this contract failure is recorded (fire-and-
+          // forget — the correction retry must not wait on the DB), and the
+          // correction continues on the SAME candidate.
+          void logExecution({
+            operation,
+            config,
+            payload,
+            provider: candidate.provider,
+            model: candidate.model,
+            attempt: attempts,
+            fallbackFrom: cameFrom,
+            fallbackReason: cameReason,
+            status: 'FAILED',
+            errorCode: SCHEMA_VALIDATION_FAILED,
+            latencyMs: Date.now() - attemptStartedAt,
+            outputSummary: { validationPassed: false, errorCode: SCHEMA_VALIDATION_FAILED, attempts },
+          });
+          promptText = buildCorrectionPrompt(config, payload.prompt);
+          continue;
+        }
+        return failContractValidation({ operation, config, payload, startedAt, candidate, attempts, previousCandidate, previousCategory });
+      }
+
+      const parsed = schema.safeParse(json);
+      if (!parsed.success) {
+        if (correctionsUsed < AI_CONFIG.maxCorrectionRetries && attempts < AI_CONFIG.maxTotalAttempts) {
+          correctionsUsed += 1;
+          void logExecution({
+            operation,
+            config,
+            payload,
+            provider: candidate.provider,
+            model: candidate.model,
+            attempt: attempts,
+            fallbackFrom: cameFrom,
+            fallbackReason: cameReason,
+            status: 'FAILED',
+            errorCode: SCHEMA_VALIDATION_FAILED,
+            latencyMs: Date.now() - attemptStartedAt,
+            outputSummary: { validationPassed: false, errorCode: SCHEMA_VALIDATION_FAILED, attempts },
+          });
+          promptText = buildCorrectionPrompt(config, payload.prompt);
+          continue;
+        }
+        return failContractValidation({ operation, config, payload, startedAt, candidate, attempts, previousCandidate, previousCategory });
+      }
+
+      // Post-validation sanitization (M5.1 §11): runs ONLY on schema-valid
+      // output. Invalid output never reaches this line — it already failed and
+      // either retried or exhausted the operation.
+      const result = config.sanitize(parsed.data);
+      const latencyMs = Date.now() - startedAt;
+
+      await logExecution({
+        operation,
+        config,
+        payload,
+        provider: candidate.provider,
+        model: candidate.model,
+        attempt: attempts,
+        fallbackFrom: previousCandidate,
+        fallbackReason: previousCategory,
+        status: 'SUCCESS',
+        latencyMs,
+        tokenUsage: providerResult.tokenUsage,
+        outputSummary: config.buildOutputSummary(result, payload.input),
+      });
+
+      return {
+        result,
+        execution: {
+          operation,
+          provider: candidate.provider,
+          model: candidate.model,
+          promptVersion: config.promptVersion,
+          attempts,
+          correctionsUsed,
+          latencyMs,
+          candidatesTried,
+          fallbackFrom: previousCandidate,
+          fallbackReason: previousCategory,
+        },
+      };
+    }
+  }
+
+  // Every eligible candidate failed (or the attempt budget was spent). The
+  // last FAILED AIExecution row was already persisted per attempt — no
+  // duplicate row. End with one clear typed failure.
+  const finalCategory = previousCategory ?? (lastProviderError ? classifyProviderError(lastProviderError) : CATEGORIES.UNKNOWN);
+  throw new AIProviderError('AI provider request failed after retries were exhausted', {
+    failure: errorCodeFor(finalCategory),
+    attempts,
+    category: finalCategory,
+    candidatesTried,
+    upstreamStatus: lastProviderError?.details?.upstreamStatus ?? null,
+  });
 }
 
 module.exports = { run, OPERATION_REGISTRY };

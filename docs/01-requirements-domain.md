@@ -1,6 +1,6 @@
 # PrepVerse — Design Doc 1: Product Requirements & Domain Model
 
-*Status: Draft for review. Locked decisions so far: real LLM (Gemini 2.5 Flash, free tier, provider-agnostic AI Orchestrator), Node/Express modular monolith, MongoDB Atlas, JWT + bcrypt, REST API versioned at /api/v1/, deterministic backend scoring (LLM output is never the final score).*
+*Status: Draft for review. Locked decisions so far: real LLM (Gemini 3.6 Flash, free tier, provider-agnostic AI Orchestrator), Node/Express modular monolith, MongoDB Atlas, JWT + bcrypt, REST API versioned at /api/v1/, deterministic backend scoring (LLM output is never the final score).*
 
 ---
 
@@ -45,7 +45,7 @@ Sign up → Onboarding (target role, experience level)
 - Interview scheduling/calendar
 - Google OAuth login (currently a placeholder button)
 - Background job queue / async processing (only introduce if resume/LLM latency actually requires it — see Design 2)
-- Multi-provider LLM routing (architecture supports it; only Gemini is wired for MVP)
+- Multi-provider LLM routing (implemented as the M5.7 availability failover in `docs/16-ai-failover.md`: Gemini primary preserved, config-driven chain with an optional, capability-gated Groq fallback; first-class routing, load-balancing, or provider-hopping per request remains deferred)
 
 ### 1.6 Non-functional requirements
 

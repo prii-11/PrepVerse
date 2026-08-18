@@ -26,6 +26,7 @@ function buildUserContent({ question, candidateAnswer, candidateProfile }) {
   return `Question: ${question.text}
 Category: ${question.category}
 Expected topics: ${expectedTopics}
+Each topicAssessments[].skillKey must be copied EXACTLY from one of the expected-topic skillKeys above (the key before the colon) — never include the topic text, the colon, or any other explanation.
 Candidate's target role: ${candidateProfile.targetRole}
 Candidate's experience level: ${candidateProfile.experienceLevel}
 

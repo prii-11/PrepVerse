@@ -198,29 +198,39 @@ test('I. GEMINI_API_KEY comes from the environment, not source', () => {
 });
 
 // -----------------------------------------------------------------------------
-// A. Provider isolation — only orchestrator.js touches the Gemini provider/SDK
+// A. Provider isolation — only the provider layer touches the Gemini
+//    provider/SDK; nothing in modules/ or the domain services may import it
 // -----------------------------------------------------------------------------
 
-test('A. only orchestrator.js imports the Gemini provider', () => {
+test('A. only the provider registry imports the Gemini provider; the SDK lives only in providers/gemini.js', () => {
   const srcDir = path.join(__dirname, '..', 'src');
-  const importers = [];
+  const providerImporters = [];
+  const sdkImporters = [];
   (function walk(dir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
       else if (entry.name.endsWith('.js')) {
         const content = fs.readFileSync(full, 'utf8');
-        // Match actual require() targets, not path strings appearing in comments.
-        const hasProviderImport = /require\(\s*['"][^'"]*providers\/gemini['"]\s*\)/.test(content);
+        // Match actual require() targets, not path strings appearing in comments:
+        // the registry adapts provider modules with a relative './gemini' import
+        // (M5.7 — providers/registry.js is the single adapter holder).
+        const hasProviderImport = /require\(\s*['"](?:[^'"]*providers\/gemini|\.\/gemini)['"]\s*\)/.test(content);
         const hasSdkImport = /require\(\s*['"][^'"]*@google\/generative-ai['"]\s*\)/.test(content);
-        if (hasProviderImport || hasSdkImport) importers.push(path.relative(srcDir, full));
+        if (hasProviderImport) providerImporters.push(path.relative(srcDir, full));
+        if (hasSdkImport) sdkImporters.push(path.relative(srcDir, full));
       }
     }
   })(srcDir);
   assert.deepEqual(
-    importers.sort(),
-    ['ai/orchestrator.js', 'ai/providers/gemini.js'],
-    'the Gemini SDK must live in providers/gemini.js and be imported only by the orchestrator'
+    providerImporters.sort(),
+    ['ai/providers/registry.js'],
+    'the Gemini provider module must be imported only by the provider layer — never by orchestrator.js or a domain service'
+  );
+  assert.deepEqual(
+    sdkImporters.sort(),
+    ['ai/providers/gemini.js'],
+    'the @google/generative-ai SDK must be imported only by providers/gemini.js'
   );
 });
 
@@ -620,7 +630,7 @@ test('M5.2-1. analyzeResume calls orchestrator.run with RESUME_ANALYSIS', async 
   assert.ok(typeof result.promptVersion === 'string');
   assert.ok(typeof result.model === 'string');
   assert.equal(result.promptVersion, 'resume-analysis-v1');
-  assert.equal(result.model, 'gemini-2.5-flash');
+  assert.equal(result.model, 'gemini-3.6-flash');
 });
 
 test('M5.2-2. input contract matches docs/07 §2 exactly', async () => {
@@ -731,7 +741,7 @@ test('M5.2-6. successful run logs AIExecution with correct operation and entityT
   assert.ok(!log.entityId, 'entityId is undefined since no Resume exists yet');
   assert.equal(log.status, 'SUCCESS');
   assert.equal(log.provider, 'gemini');
-  assert.equal(log.model, 'gemini-2.5-flash');
+  assert.equal(log.model, 'gemini-3.6-flash');
   assert.equal(log.promptVersion, 'resume-analysis-v1');
   assert.equal(log.tokenUsage.input, 100);
   assert.equal(log.tokenUsage.output, 50);
@@ -1427,7 +1437,7 @@ test('M5.4-1. submit end-to-end: two CAS gates, per-answer evaluations with prov
   for (const answer of persisted.answers) {
     assert.equal(answer.evaluationStatus, 'COMPLETED');
     assert.ok(answer.evaluatedAt instanceof Date);
-    assert.equal(answer.evaluation.promptVersion, 'answer-evaluation-v1');
+    assert.equal(answer.evaluation.promptVersion, 'answer-evaluation-v2');
     assert.equal(answer.evaluation.model, AI_CONFIG.model);
   }
   assert.equal(persisted.answers[0].evaluation.topicAssessments[0].skillKey, 'mongodb');
@@ -1443,7 +1453,7 @@ test('M5.4-1. submit end-to-end: two CAS gates, per-answer evaluations with prov
     assert.equal(execution.status, 'SUCCESS');
     assert.equal(execution.entityType, 'INTERVIEW');
     assert.equal(execution.userId.toString(), user._id.toString());
-    assert.equal(execution.promptVersion, 'answer-evaluation-v1');
+    assert.equal(execution.promptVersion, 'answer-evaluation-v2');
     assert.ok(execution.outputSummary.validationPassed === true);
     assert.equal(typeof execution.outputSummary.scores.correctness, 'number');
   }

@@ -1,6 +1,6 @@
 # ROADMAP.md
 
-Status: system design complete (`/docs/01` – `/docs/08`). Server milestones `M2.1`–`M4.5` and `M5.1`–`M5.6` are implemented and CLOSED; the next milestone is `M6` (storage per `docs/06`). This document maps the original prototype against that design as the historical implementation plan; the milestone table below (§ Build order) is the live status index.
+Status: system design complete (`/docs/01` – `/docs/08`). Server milestones `M2.1`–`M4.5` and `M5.1`–`M5.7` are implemented and CLOSED; the next milestone is `M6` (storage per `docs/06`). This document maps the original prototype against that design as the historical implementation plan; the milestone table below (§ Build order) is the live status index.
 
 ## Server — `server/`
 
@@ -15,7 +15,7 @@ Status: system design complete (`/docs/01` – `/docs/08`). Server milestones `M
 | `routes/authRoutes.js` | **Refactor** | Only 2 routes exist (`/signup`, `/login`). Needs `/logout`, `/me` added, and the whole thing versioned under `/api/v1/auth`. |
 | `middleware/authMiddleware.js` | **Rewrite** | Currently an empty placeholder — this is real, unimplemented work, not a refactor. Needs JWT verification + `req.user` population, used by every protected route. |
 | *(does not exist)* `modules/users/`, `modules/resumes/`, `modules/interviews/`, `modules/analytics/` | **Implemented** | All five modules exist now: `server/src/modules/{auth,users,resumes,interviews,analytics}/` (M2.1–M5.3). |
-| *(does not exist)* `ai/` (orchestrator, providers, resumeAnalyzer, questionGenerator, answerEvaluator, schemas) | **Implemented** | `orchestrator.js`, `providers/gemini.js`, `resumeAnalyzer.js`, `questionGenerator.js`, `answerEvaluator.js`, `schemas/` all exist (M5.1–M5.4). |
+| *(does not exist)* `ai/` (orchestrator, providers, resumeAnalyzer, questionGenerator, answerEvaluator, schemas) | **Implemented** | `orchestrator.js`, `providers/{gemini,groq,registry,classify,health}.js`, `resumeAnalyzer.js`, `questionGenerator.js`, `answerEvaluator.js`, `schemas/` all exist (M5.1–M5.7). |
 | *(does not exist)* `RoleSkillCatalog` seed data | **Implemented** | `server/scripts/seedRoleSkillCatalog.js` (M2.3). |
 | *(does not exist)* `middleware/rateLimit.js`, `middleware/upload.js`, `middleware/error.js` | **Implemented** | `server/src/middleware/{auth,error,rateLimit,validate,upload}.js` all exist (M2.1–M3). |
 
@@ -58,8 +58,9 @@ Each milestone follows: MASTER PROMPT → OpenCode implements → CHECK PROMPT (
 | M3 | Auth: stateless short-lived JWT only — signup → login → middleware → /me → logout. **No RefreshToken collection, no refresh cookie, no rotation** (docs/06 §1.1, final) | CLOSED |
 | M4 | Core domain APIs: onboarding, resume metadata, interviews, reports — real contracts, no AI yet | CLOSED (implemented as M4.1–M4.4) |
 | M4.5 | Skill engine: RoleSkillCatalog seed + SkillProfileService, deterministic and unit-tested with zero Gemini dependency (docs/08) | CLOSED |
-| M5 | AI: Gemini adapter, AI Orchestrator, Resume Analysis, Question Generation, Answer Evaluation + topicAssessments, AIExecution logging | M5.1–M5.6 CLOSED (adapter, orchestrator, resume analysis, question generation, answer evaluation + topicAssessments + submission, AIExecution, skill evolution: evidence normalization + transactional profile sync, readiness: coverage-weighted score + breakdown per docs/07 §6). Next: M6 (storage) |
+| M5 | AI: Gemini adapter, AI Orchestrator, Resume Analysis, Question Generation, Answer Evaluation + topicAssessments, AIExecution logging | M5.1–M5.7 CLOSED (adapter, orchestrator, resume analysis, question generation, answer evaluation + topicAssessments + submission, AIExecution, skill evolution: evidence normalization + transactional profile sync, readiness: coverage-weighted score + breakdown per docs/07 §6, provider failover: config-driven candidate chain, capability gates, health cooldowns, per-attempt audit per docs/16). Next: M6 (storage) |
 | M5.6 | Readiness Service: skillCoverage, weighted readiness + breakdown (docs/07 §6, docs/08 §6) | CLOSED (ReadinessService verified end-to-end by the M5.6 behavior-level contract suite; docs drift reconciled) |
+| M5.7 | AI provider failover: provider/model registry + candidate chain, failure taxonomy, retry-vs-failover policy, health cooldowns, per-attempt AIExecution chain-link provenance (docs/16) | CLOSED (registry/classify/health adapters + orchestrator integration verified by the M5.7 contract suite; m5.1 suite updated to the provider-layer isolation invariant; regression parity with the pre-M5.7 baseline; real-provider verification deferred as environment-limited) |
 | M6 | Storage: Supabase Storage, resume upload/download, signed URLs | NOT STARTED |
 | M7 | Frontend integration: replace every mock service with real API calls, page by page | NOT STARTED |
 | M8 | Hardening: rate limits, validation, security review, concurrency, tests, deployment | NOT STARTED |
@@ -67,4 +68,4 @@ Each milestone follows: MASTER PROMPT → OpenCode implements → CHECK PROMPT (
 Each milestone's own master prompt carries its detailed Acceptance Criteria checklist — kept as separate files (e.g. `M2.1-master-prompt-v2.md`) rather than duplicated here, so this table stays a status index, not a second copy that can drift from the real prompt.
 
 ## What's explicitly NOT happening in MVP
-Per `docs/01` §1.5: voice/audio, interview scheduling, Google OAuth, background job queue, multi-provider LLM routing, Redis/Kafka. Don't build these even if it seems easy while touching nearby code.
+Per `docs/01` §1.5: voice/audio, interview scheduling, Google OAuth, background job queue, Redis/Kafka. Multi-provider **availability failover** IS built (M5.7, docs/16) — first-class routing, load-balancing, and provider-hopping per request are not. Don't build these even if it seems easy while touching nearby code.

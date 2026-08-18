@@ -87,7 +87,7 @@ Readiness score is **never stored** — it's computed on read by `ReadinessServi
                  ▼              ▼               ▼
           ┌────────────┐ ┌─────────────┐ ┌─────────────┐
           │  MongoDB   │ │  Gemini API │ │   Object    │
-          │   Atlas    │ │(2.5 Flash)  │ │   Storage   │
+          │   Atlas    │ │(3.6 Flash)  │ │   Storage   │
           └────────────┘ └─────────────┘ └─────────────┘
 ```
 
@@ -144,9 +144,16 @@ AI Orchestrator call
       │                                          with errorCode, surface a
       │                                          user-facing "try again" error
       │
+      ├─ availability failure with fallback configured (M5.7, docs/16):
+      │   exhausted 429 backoff / quota / 5xx / timeout → next candidate in
+      │   the configured chain, bounded by AI_MAX_TOTAL_ATTEMPTS, each attempt
+      │   audited with attempt/fallbackFrom/fallbackReason (docs/05 §6)
+      │
       └─ max retries exhausted → Interview → EVALUATION_FAILED
                                   Resume → FAILED
 ```
+
+**M5.7 amendment:** the module layout is unchanged (`ai/` gains the provider layer `providers/{registry,classify,health,gemini,groq}.js` — see docs/16 §0/§2); only the orchestrator, config/ai, and the AIExecution schema change, all backward-compatible. Client-visible behavior is unchanged for the default single-provider deployment (docs/16 §12 rollback path).
 
 ---
 
@@ -240,7 +247,7 @@ Layering per request (see §2.2 for the full, authoritative pipeline): `IP Rate 
 2. **ReadinessService formula:** finalized in Design 7 §6:
    `0.35 × technical + 0.20 × communication + 0.25 × skillCoverage + 0.10 × consistency + 0.10 × improvementTrend`, with the documented cold-start handling.
 3. **JWT logout semantics:** stateless short-lived JWT. Logout discards the client-held access token. There is no refresh-token collection, refresh cookie, rotation, or server-side blacklist in MVP.
-4. **AI provider:** Gemini 2.5 Flash behind the provider-agnostic AI Orchestrator.
+4. **AI provider:** Gemini 3.6 Flash behind the provider-agnostic AI Orchestrator.
 
 ---
 

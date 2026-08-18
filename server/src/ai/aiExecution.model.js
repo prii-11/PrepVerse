@@ -1,5 +1,7 @@
 // Mongoose AIExecution model — docs/05-database-schema.md §6.
-// One document per AI call to Gemini, for debugging and AI-abuse monitoring.
+// One document per AI provider/model ATTEMPT (M5.7): a logical operation that
+// fails over across candidates produces one row per attempt, so the full
+// chain, failure reasons, and the final producer are reconstructible.
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
@@ -12,6 +14,16 @@ const aiExecutionSchema = new Schema({
   provider: { type: String, default: 'gemini' },
   model: String,
   promptVersion: String,
+
+  // M5.7 failover provenance — one document per provider/model attempt of a
+  // logical AI operation. `attempt` is the 1-based total call index across
+  // the whole operation; `fallbackFrom` is the "provider/model" label of the
+  // candidate this attempt was reached from; `fallbackReason` is that
+  // candidate's failure category (e.g. QUOTA_EXHAUSTED). null on the first
+  // attempt and on non-failover paths.
+  attempt: Number,
+  fallbackFrom: String,
+  fallbackReason: String,
 
   status: { type: String, enum: ['SUCCESS', 'FAILED'] },
   latencyMs: Number,

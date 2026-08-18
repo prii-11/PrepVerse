@@ -20,7 +20,7 @@ const resumeSchema = new Schema({
     strengths: [String],
     skillGaps: [String],
     promptVersion: String, // e.g. "resume-analysis-v1"
-    model: String, // e.g. "gemini-2.5-flash"
+    model: String, // e.g. "gemini-3.6-flash"
   },
 
   // Set only if status: FAILED — an errorCode, never raw model output.
