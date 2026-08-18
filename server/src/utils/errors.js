@@ -68,6 +68,19 @@ class ResumeTextExtractionError extends AppError {
   }
 }
 
+// Object storage (Supabase) failure — M6 (docs/17 D1). Deliberately distinct
+// from AIProviderError: storage is its own upstream with its own taxonomy.
+// `details.category` classifies the failure (AUTHENTICATION_FAILED |
+// NOT_FOUND | CONFLICT | PAYLOAD_TOO_LARGE | STORAGE_UNAVAILABLE);
+// `details.upstreamStatus` carries the HTTP status when one exists. The
+// client makes ONE attempt per call (no retry loop — retry policy belongs to
+// callers, mirroring the AI providers' single-attempt contract).
+class StorageClientError extends AppError {
+  constructor(message = 'Object storage request failed', details) {
+    super('OBJECT_STORAGE_FAILED', message, 502, details);
+  }
+}
+
 module.exports = {
   AppError,
   NotFoundError,
@@ -77,4 +90,5 @@ module.exports = {
   RateLimitError,
   AIProviderError,
   ResumeTextExtractionError,
+  StorageClientError,
 };

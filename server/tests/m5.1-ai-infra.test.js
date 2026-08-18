@@ -1898,7 +1898,12 @@ test('M5.4-13. answerEvaluator: no persistence, no HTTP, no SkillProfileService,
   // diff-level forbidden set, but out-of-scope technologies must still never
   // enter server/src through any M5.5 change.
   const { execSync } = require('node:child_process');
-  const diff = execSync('git diff 54e8884 -- server/src', {
+  // M6 (docs/17 §4.7): M6 legitimately introduces Supabase references in
+  // src/storage/ and src/utils/errors.js. Scope this diff-level net to the
+  // layers it exists to protect — the AI and analytics boundaries — where
+  // 'supabase'/storage technology must never appear; the M6 storage module is
+  // the sanctioned owner elsewhere, and its own file-level guards govern it.
+  const diff = execSync('git diff 54e8884 -- server/src/ai server/src/modules server/src/domain', {
     encoding: 'utf8',
     cwd: REPO_ROOT,
   });

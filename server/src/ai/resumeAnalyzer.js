@@ -30,15 +30,17 @@ function buildPrompt({ targetRole, experienceLevel, resumeText }) {
  * Analyze a resume via the AI Orchestrator.
  *
  * @param {Object} params
- * @param {string} params.resumeText - Plain text extracted from resume (M6 handles extraction)
+ * @param {string} params.resumeText - Plain text extracted from resume (M6 P2 extracts it)
  * @param {string} params.targetRole - From user profile (catalog-backed)
  * @param {string} params.experienceLevel - "Student" | "Entry" | "Junior"
  * @param {string} params.userId - User ID for AIExecution logging
+ * @param {string} [params.entityId] - Resume _id once it exists (M6 P2: the
+ *   doc is created UPLOADED before analysis, so the execution traces to it)
  * @returns {Promise<Object>} Validated ResumeAnalysis result matching docs/07 §2 schema + provenance
  * @throws {ResumeTextExtractionError} If resumeText is empty/whitespace-only
  * @throws {AIProviderError} If orchestrator exhausts retries (propagated)
  */
-async function analyzeResume({ resumeText, targetRole, experienceLevel, userId }) {
+async function analyzeResume({ resumeText, targetRole, experienceLevel, userId, entityId }) {
   // Pre-check: empty/garbled text caught before any Gemini call (docs/07 §2)
   if (!resumeText || resumeText.trim().length === 0) {
     throw new ResumeTextExtractionError();
@@ -51,8 +53,11 @@ async function analyzeResume({ resumeText, targetRole, experienceLevel, userId }
   // ResumeAnalyzer provides the payload and returns the validated result.
   const { result, execution } = await orchestrator.run('RESUME_ANALYSIS', {
     userId,
-    // entityId is optional — Resume doesn't exist yet (M6 will create it after analysis).
-    // The orchestrator logs entityId as undefined, which the AIExecution schema allows.
+    // M6 P2: the Resume doc exists (UPLOADED) before analysis, so the
+    // execution traces to it via entityId (docs/06 §4.3). Omitted (undefined)
+    // on the legacy pre-M6 path where no doc exists yet — the schema allows
+    // both.
+    ...(entityId ? { entityId } : {}),
     prompt,
     input: { resumeText, targetRole, experienceLevel },
   });

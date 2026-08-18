@@ -110,6 +110,9 @@ server/
 │   │   ├── questionGenerator.js
 │   │   ├── answerEvaluator.js
 │   │   └── schemas/       (structured-output validation, one per operation)
+│   ├── storage/
+│   │   ├── storage.client.js         (Supabase Storage REST via fetch — M6; the ONLY module that speaks to object storage)
+│   │   └── textExtractor.js          (PDF/DOCX → plain text — M6 P2; owns pdf-parse/mammoth, the only file-parsing deps)
 │   ├── middleware/       (auth, error, rateLimit, upload)
 │   ├── utils/
 │   ├── app.js
@@ -179,10 +182,11 @@ Layering per request (see §2.2 for the full, authoritative pipeline): `IP Rate 
 ### Resumes
 | Method | Path | Notes |
 |---|---|---|
-| POST | /api/v1/resumes | synchronous: upload → extraction + AI analysis → status: ANALYZED or FAILED (no PROCESSING state; see §2.3) |
-| GET | /api/v1/resumes | list user's resumes |
+| POST | /api/v1/resumes | synchronous: upload → extraction + AI analysis → status: ANALYZED or FAILED (no PROCESSING state; see §2.3). Multipart 'file' field; validation (MIME allowlist PDF/DOCX, ≤5MB, magic-byte sniff, filename sanitization) happens in middleware before any storage/AI call (docs/06 §3). 201 on both terminal states; FAILED carries `failureReason` = errorCode |
+| GET | /api/v1/resumes | list user's resumes (lightweight: no analysis, no storageKey) |
 | GET | /api/v1/resumes/:id | includes analysis once status: ANALYZED |
-| DELETE | /api/v1/resumes/:id | |
+| GET | /api/v1/resumes/:id/download | signed short-lived URL (15 min TTL, docs/06 §3.3) → `{ url, filename, expiresInSeconds }`; never a public link, never a stream |
+| DELETE | /api/v1/resumes/:id | 204; removes the Mongo doc AND the stored object (best-effort object cleanup) |
 
 ### Interviews
 | Method | Path | Notes |

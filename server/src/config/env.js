@@ -30,6 +30,7 @@ module.exports = {
   GEMINI_API_KEY: process.env.GEMINI_API_KEY, // required from M5 (AI)
   SUPABASE_URL: process.env.SUPABASE_URL, // required from M6 (storage)
   SUPABASE_KEY: process.env.SUPABASE_KEY, // required from M6 (storage)
+  SUPABASE_BUCKET: process.env.SUPABASE_BUCKET, // required from M6 (storage)
 
   // M5.7 AI provider chain (failover) — all optional; config/ai.js computes
   // the effective defaults (chain = ["gemini"], etc.). AI_PROVIDER_CHAIN

@@ -49,7 +49,7 @@ Each module: `controller → service → routes → validation`. Controllers are
 
 ## Current status
 
-See `ROADMAP.md` for what exists and what's next. Backend milestones M2.1–M4.5 and M5.1–M5.7 are CLOSED (M5.7 = AI provider failover per `docs/16`); the current milestone is M6 (Storage — Supabase resume upload/download per `docs/06`). `client/` remains the pre-design prototype — don't assume it matches the design.
+See `ROADMAP.md` for what exists and what's next. Backend milestones M2.1–M4.5, M5.1–M5.7 and M6 are CLOSED (M5.7 = AI provider failover per `docs/16`; M6 = storage per `docs/06`, delivered per `docs/17`); the current milestone is M7 (frontend integration). `client/` remains the pre-design prototype — don't assume it matches the design.
 
 
 ## Canonical design rule
