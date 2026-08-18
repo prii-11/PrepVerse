@@ -1,4 +1,4 @@
-// Shared application constants and demo data used across the frontend.
+// Shared application constants used across the frontend.
 export const APP_NAME = 'AI Mock Interview Ecosystem';
 
 export const ROUTES = {
@@ -15,17 +15,9 @@ export const ROUTES = {
   progress: '/progress',
 };
 
-export const DEMO_USER = {
-  name: 'Aarav Sharma',
-  email: 'aarav.sharma@example.com',
-  role: 'Student',
-  targetRole: 'Frontend Developer',
+// Backend failureReason codes (resume model + M6 tests) → human labels.
+export const FAILURE_REASON_LABELS = {
+  RESUME_TEXT_EXTRACTION_FAILED: 'We could not read text from this file. Try a different PDF or DOCX.',
+  AI_PROVIDER_FAILED: 'The analysis service was unavailable. Please try again later.',
+  SCHEMA_VALIDATION_FAILED: 'The analysis produced an invalid result. Please try again.',
 };
-
-export const DEMO_WEAK_AREAS = ['System Design', 'Behavioral Answers', 'Time Management'];
-
-export const DEMO_STEPS = [
-  'Upload your resume',
-  'Run an AI interview session',
-  'Review feedback and improve',
-];

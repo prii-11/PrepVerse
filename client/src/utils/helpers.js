@@ -10,3 +10,10 @@ export function formatPercent(value) {
 export function createMockResponse(data) {
   return Promise.resolve({ data });
 }
+
+// Extracts the backend error envelope message (docs/02 §3:
+// { error: { code, message, details } }) with a fallback for network/unknown
+// failures.
+export function getErrorMessage(error, fallback = 'Something went wrong. Please try again.') {
+  return error?.response?.data?.error?.message || fallback;
+}

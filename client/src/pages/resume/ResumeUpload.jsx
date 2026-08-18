@@ -1,4 +1,5 @@
-// Resume upload page that hosts the file intake experience.
+// Resume upload page — hosts the real file intake experience with the full
+// upload flow: idle → invalid → uploading → success (ANALYZED/FAILED).
 import ResumeUploader from '../../components/resume/ResumeUploader';
 
 export default function ResumeUpload() {

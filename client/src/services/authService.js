@@ -1,16 +1,26 @@
-// Mock authentication service that can later be replaced with backend calls.
-import { createMockResponse } from '../utils/helpers';
+// Authentication service — the only caller of the auth endpoints
+// (docs/02 §3): register, login, logout, me. All calls flow through the
+// shared axios client so the Bearer token is attached automatically.
+import api from './api';
 
 export const authService = {
-  login: async (credentials) =>
-    createMockResponse({
-      token: 'demo-token',
-      user: { name: credentials?.email?.split('@')[0] || 'Student', email: credentials?.email || 'student@example.com' },
-    }),
-  signup: async (payload) =>
-    createMockResponse({
-      token: 'demo-token',
-      user: { name: payload?.name || 'New Student', email: payload?.email || 'student@example.com' },
-    }),
-  logout: async () => createMockResponse({ success: true }),
+  async register(payload) {
+    const { data } = await api.post('/auth/register', payload);
+    return data; // { token, user }
+  },
+
+  async login(credentials) {
+    const { data } = await api.post('/auth/login', credentials);
+    return data; // { token, user }
+  },
+
+  async me() {
+    const { data } = await api.get('/auth/me');
+    return data; // { user }
+  },
+
+  async logout() {
+    const { data } = await api.post('/auth/logout');
+    return data; // { message }
+  },
 };

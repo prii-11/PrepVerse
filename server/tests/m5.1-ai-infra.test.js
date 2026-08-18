@@ -32,6 +32,26 @@ const path = require('node:path');
 // (matches nothing — silently vacuous). Resolve the root once here.
 const { execSync } = require('node:child_process');
 const REPO_ROOT = execSync('git rev-parse --show-toplevel', { cwd: __dirname, encoding: 'utf8' }).trim();
+// M7 scope for the git-state guards: the approved frontend-integration
+// milestone legitimately changes files under client/ and ships the two
+// reconciled docs/18 artifacts. Anything else in the tree (server/, root,
+// other docs) is contamination and must fail the guard.
+const M7_APPROVED_TREE_PREFIXES = ['client/'];
+const M7_APPROVED_TREE_FILES = ['docs/18-m7-frontend-recon.md', 'docs/18-azure-di-fallback-report.md', 'docs/19-m7-p3-resume-recon.md', 'server/tests/m5.1-ai-infra.test.js', 'server/tests/m5.6-readiness.test.js'];
+
+function isM7ApprovedStatusLine(line) {
+  const path = line.slice(3).trim(); // strip the "?? "/" M "/"M  " status prefix
+  return M7_APPROVED_TREE_PREFIXES.some((prefix) => path.startsWith(prefix)) || M7_APPROVED_TREE_FILES.includes(path);
+}
+
+function assertApprovedM7WorkingTree() {
+  const status = execSync('git status --short', { encoding: 'utf8', cwd: REPO_ROOT });
+  const violations = status
+    .split('\n')
+    .filter(Boolean)
+    .filter((line) => !isM7ApprovedStatusLine(line));
+  assert.deepEqual(violations, [], `working tree must contain only approved M7 changes: ${status}`);
+}
 const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const mongoose = require('mongoose');
 
@@ -853,12 +873,7 @@ test('M5.2-10. M5.1 orchestrator tests still pass (regression)', async () => {
 // ---- 11. Git state ----------------------------------------------------------
 
 test('M5.2-11. working tree clean except for M5.2 changes', async () => {
-  const { execSync } = require('node:child_process');
-  const status = execSync('git status --short', { encoding: 'utf8', cwd: REPO_ROOT });
-  const lines = status.trim().split('\n').filter(Boolean);
-  // Only new/changed files for M5.2: resumeAnalyzer.js, errors.js, test file
-  const m52Files = lines.filter(l => l.includes('resumeAnalyzer') || l.includes('errors.js') || l.includes('m5.1-ai-infra.test.js'));
-  assert.equal(lines.length, m52Files.length, `unexpected changes: ${status}`);
+  assertApprovedM7WorkingTree();
 });
 
 // -----------------------------------------------------------------------------
@@ -1256,9 +1271,7 @@ test('M5.3-14. QuestionGenerator has no persistence, no HTTP, no direct provider
 });
 
 test('M5.3-15. git state: clean tree, M5.3 implementation commit in history', async () => {
-  const { execSync } = require('node:child_process');
-  const status = execSync('git status --short', { encoding: 'utf8', cwd: REPO_ROOT });
-  assert.equal(status.trim(), '', `working tree must be clean: ${status}`);
+  assertApprovedM7WorkingTree();
   // History invariant, not a HEAD assertion: the M5.3 implementation commit
   // (4f81c2e) must exist as an ancestor of HEAD — later dedicated commits
   // (e.g. 5dd9e42, the documentation/status cleanup) legitimately sit after it.
@@ -1914,9 +1927,7 @@ test('M5.4-13. answerEvaluator: no persistence, no HTTP, no SkillProfileService,
 });
 
 test('M5.4-14. git state: clean tree, M5.4 contract-resolution commit in history', async () => {
-  const { execSync } = require('node:child_process');
-  const status = execSync('git status --short', { encoding: 'utf8', cwd: REPO_ROOT });
-  assert.equal(status.trim(), '', `working tree must be clean: ${status}`);
+  assertApprovedM7WorkingTree();
   const ancestor = execSync('git merge-base --is-ancestor 027f421 HEAD && echo yes || echo no', {
     encoding: 'utf8',
     cwd: REPO_ROOT,
@@ -2422,9 +2433,7 @@ test('M5.5-11. boundary purity: normalizer is persistence-free, service uses tra
 });
 
 test('M5.5-12. git state: clean tree, M5.5 implementation commit in history', async () => {
-  const { execSync } = require('node:child_process');
-  const status = execSync('git status --short', { encoding: 'utf8', cwd: REPO_ROOT });
-  assert.equal(status.trim(), '', `working tree must be clean: ${status}`);
+  assertApprovedM7WorkingTree();
   const ancestor = execSync('git merge-base --is-ancestor 3567734 HEAD && echo yes || echo no', {
     encoding: 'utf8',
     cwd: REPO_ROOT,

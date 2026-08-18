@@ -1,9 +1,18 @@
 // Top navigation bar for authenticated screens and mobile friendliness.
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { APP_NAME, ROUTES } from '../../utils/constants';
+import useAuth from '../../hooks/useAuth';
 import Button from './Button';
 
 export default function Navbar() {
+  const auth = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogout = async () => {
+    await auth.logout();
+    navigate(ROUTES.login, { replace: true });
+  };
+
   return (
     <header className="border-b border-[#E5E7EB] bg-white/80 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 lg:px-6">
@@ -15,6 +24,9 @@ export default function Navbar() {
             Profile
           </Link>
           <Button variant="secondary">New Interview</Button>
+          <Button variant="ghost" onClick={handleLogout}>
+            Log Out
+          </Button>
         </div>
       </div>
     </header>

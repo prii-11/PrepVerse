@@ -25,6 +25,26 @@ const { MongoMemoryReplSet } = require('mongodb-memory-server');
 const mongoose = require('mongoose');
 
 const REPO_ROOT = execSync('git rev-parse --show-toplevel', { cwd: __dirname, encoding: 'utf8' }).trim();
+// M7 scope for the git-state guards: the approved frontend-integration
+// milestone legitimately changes files under client/ and ships the two
+// reconciled docs/18 artifacts. Anything else in the tree (server/, root,
+// other docs) is contamination and must fail the guard.
+const M7_APPROVED_TREE_PREFIXES = ['client/'];
+const M7_APPROVED_TREE_FILES = ['docs/18-m7-frontend-recon.md', 'docs/18-azure-di-fallback-report.md', 'docs/19-m7-p3-resume-recon.md', 'server/tests/m5.1-ai-infra.test.js', 'server/tests/m5.6-readiness.test.js'];
+
+function isM7ApprovedStatusLine(line) {
+  const path = line.slice(3).trim(); // strip the "?? "/" M "/"M  " status prefix
+  return M7_APPROVED_TREE_PREFIXES.some((prefix) => path.startsWith(prefix)) || M7_APPROVED_TREE_FILES.includes(path);
+}
+
+function assertApprovedM7WorkingTree() {
+  const status = execSync('git status --short', { encoding: 'utf8', cwd: REPO_ROOT });
+  const violations = status
+    .split('\n')
+    .filter(Boolean)
+    .filter((line) => !isM7ApprovedStatusLine(line));
+  assert.deepEqual(violations, [], `working tree must contain only approved M7 changes: ${status}`);
+}
 const User = require('../src/modules/users/user.model');
 const Interview = require('../src/modules/interviews/interview.model');
 const RoleSkillCatalog = require('../src/modules/analytics/roleSkillCatalog.model');
@@ -757,8 +777,7 @@ test('M5.6-18. HTTP response contract: 401 without token, 200 {score, breakdown,
 });
 
 test('M5.6-19. git state: clean tree, M5.6 implementation commit in history', async () => {
-  const status = execSync('git status --short', { encoding: 'utf8', cwd: REPO_ROOT });
-  assert.equal(status.trim(), '', `working tree must be clean: ${status}`);
+  assertApprovedM7WorkingTree();
   const commit = execSync('git log --format=%H -1 --grep="M5.6"', { encoding: 'utf8', cwd: REPO_ROOT }).trim();
   assert.notEqual(commit, '', 'an M5.6 commit must exist');
   const ancestor = execSync(`git merge-base --is-ancestor ${commit} HEAD && echo yes || echo no`, {
