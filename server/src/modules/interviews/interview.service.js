@@ -464,7 +464,8 @@ async function submitInterview(userId, id) {
 
   // Plain read for aggregation only — the final state write below is still
   // CAS'd on EVALUATING (the read never behaves as a write precondition).
-  const current = await Interview.findById(id);
+  // Ownership-scoped per docs/06 §2 (already proven by the CAS gates above).
+  const current = await Interview.findOne({ _id: id, userId });
   const completedAnswers = current.answers.filter(
     (answer) => answer.evaluationStatus === 'COMPLETED' && answer.evaluation
   );
@@ -514,7 +515,8 @@ async function submitInterview(userId, id) {
   // transaction committed, FAILED when it did not, never the stale PENDING
   // snapshot. Successful submission response = the same Interview detail
   // shape as GET /:id (docs/02 §3) — no new response envelope.
-  const finalState = await Interview.findById(id);
+  // Ownership-scoped per docs/06 §2 (already proven by the CAS gates above).
+  const finalState = await Interview.findOne({ _id: id, userId });
   if (!finalState) {
     throw new NotFoundError('Interview not found');
   }
