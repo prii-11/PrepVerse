@@ -70,7 +70,7 @@ flowchart TD
     %% Auth
     U -->|Register/Login| AUTH[Auth Module<br/>JWT Issuance]
     AUTH -.->|Middleware| ALL[All Protected Routes]
-    ALL -.->|Ownership| OWN[findOne {_id, userId}]
+    ALL -.->|Ownership| OWN["findOne {_id, userId}"]
     
     classDef user fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
     classDef ai fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px;
