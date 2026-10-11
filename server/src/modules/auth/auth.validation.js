@@ -1,5 +1,5 @@
 // Auth request validation (docs/06-security.md §1.2, §3; M3 §6).
-// Password rules (M3 master prompt): min 8 chars, at most 1 repeated
+// Password rules (M3 spec): min 8 chars, at most 1 repeated
 // character, at least one uppercase, one lowercase, one digit. Applied before
 // the controller runs via src/middleware/validate.js; controllers read
 // req.validatedBody, never raw req.body.

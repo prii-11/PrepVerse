@@ -1,4 +1,4 @@
-# AGENTS.md — Instructions for coding agents (OpenCode and others)
+# AGENTS.md — Development Guidelines
 
 ## Read this first, every session
 
@@ -35,7 +35,7 @@ Before writing or modifying any code in this repo, read `/docs/` in order:
 
 ## Standing rule for every milestone
 
-Don't improvise architecture, even locally. If a design doc is ambiguous or two docs disagree, STOP and report the ambiguity rather than picking an interpretation and proceeding — this repo has already been through several rounds of catching exactly this kind of drift, and it's cheaper to ask than to build the wrong thing and unwind it later. Each milestone's own master prompt states its specific scope boundaries (what NOT to touch this phase); treat those as hard constraints, not suggestions.
+Don't improvise architecture, even locally. If a design doc is ambiguous or two docs disagree, STOP and report the ambiguity rather than picking an interpretation and proceeding — this repo has already been through several rounds of catching exactly this kind of drift, and it's cheaper to ask than to build the wrong thing and unwind it later. Each milestone carries its specific scope boundaries (what NOT to touch this phase); treat those as hard constraints, not suggestions.
 
 ## Where things go
 

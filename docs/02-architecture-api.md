@@ -91,7 +91,7 @@ Readiness score is **never stored** — it's computed on read by `ReadinessServi
           └────────────┘ └─────────────┘ └─────────────┘
 ```
 
-### 2.1 Backend module layout (extends the structure your friend's ChatGPT sketched)
+### 2.1 Backend module layout
 
 ```
 server/
@@ -223,7 +223,7 @@ Layering per request (see §2.2 for the full, authoritative pipeline): `IP Rate 
 - **Report aggregation (deterministic backend aggregation, no LLM call — docs/05 §4 note):** `report.strengths`/`report.weaknesses` aggregate the COMPLETED answers' `evaluation.strengths`/`evaluation.weaknesses`, preserving answer order then per-answer order, case-insensitive deduplication with first occurrence winning, maximum 5, no frequency threshold. `report.recommendations` aggregates the COMPLETED answers' `evaluation.improvementTip` under the same rules — resolved: not derived from weaknesses, and no per-answer recommendations field is introduced.
 - **Per-user AI rate limiting:** remains deferred — the existing no-op middleware is not mounted, `rateLimit.js` is not modified; provider 429 retry (orchestrator backoff) and application-level per-user rate limiting remain separate concerns (docs/06 §0.1).
 - **M5.5 scope boundary:** submission/evaluation persists `answers[].evaluation.topicAssessments` (docs/05 §4) and then synchronizes normalized evidence into `User.currentSkillProfile` (docs/05 §7, docs/08 §9/§9a). Explicitly deferred and out of scope for M5.5 (docs/08 §10): readiness/practice-plan computation, skill decay, recency weighting, cross-interview question deduplication, and any re-processing/retry endpoint for FAILED syncs (FAILED is terminal for MVP).
-- **Required M5.4 CHECK proof — concurrency (the gap-resolution audit confirmed NO existing concurrent race test in the suite):** the M5.4 CHECK PROMPT MUST include real concurrent tests proving both directions after both operations settle, inspecting the persisted document: (A) cancel wins — final `status === 'CANCELLED'`, no evaluation state written after cancellation, no `CANCELLED → COMPLETED`/`EVALUATION_FAILED` resurrection, losing evaluation reports the expected conflict; (B) evaluation wins — final `status === 'COMPLETED'` with intact report, cancel reports the expected conflict, `COMPLETED` never becomes `CANCELLED`. The CAS pattern is not "test-proven" until these tests exist and pass.
+- **Required M5.4 concurrency proof (the gap-resolution audit confirmed NO existing concurrent race test in the suite):** the test suite MUST include real concurrent tests proving both directions after both operations settle, inspecting the persisted document: (A) cancel wins — final `status === 'CANCELLED'`, no evaluation state written after cancellation, no `CANCELLED → COMPLETED`/`EVALUATION_FAILED` resurrection, losing evaluation reports the expected conflict; (B) evaluation wins — final `status === 'COMPLETED'` with intact report, cancel reports the expected conflict, `COMPLETED` never becomes `CANCELLED`. The CAS pattern is not "test-proven" until these tests exist and pass.
 
 ### Analytics
 | Method | Path | Notes |

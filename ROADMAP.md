@@ -46,9 +46,9 @@ Status: system design complete (`/docs/01` – `/docs/08`). Server milestones `M
 - Gemini API key (AI Studio, free tier)
 - MongoDB Atlas cluster (if not already provisioned) — must be a **replica set** to support the transactions required by `SkillProfileService` (`docs/08` §8)
 
-## Build order — milestone plan (source of truth for OpenCode phases)
+## Build order — milestone plan
 
-Each milestone follows: MASTER PROMPT → OpenCode implements → CHECK PROMPT (self-audit) → dual review (ChatGPT + Claude) → git commit → next milestone. OpenCode does not improvise architecture — ambiguity gets reported back, not resolved unilaterally (see AGENTS.md guardrails).
+Each milestone follows a structured implementation process with defined acceptance criteria, self-audit checkpoints, and review gates before proceeding to the next milestone. Architecture decisions are documented in `/docs/` — ambiguities are resolved through design review, not improvised during implementation.
 
 | Milestone | Scope | Status |
 |---|---|---|
@@ -65,7 +65,7 @@ Each milestone follows: MASTER PROMPT → OpenCode implements → CHECK PROMPT (
 | M7 | Frontend integration: replace every mock service with real API calls, page by page | NOT STARTED |
 | M8 | Hardening: rate limits, validation, security review, concurrency, tests, deployment | NOT STARTED |
 
-Each milestone's own master prompt carries its detailed Acceptance Criteria checklist — kept as separate files (e.g. `M2.1-master-prompt-v2.md`) rather than duplicated here, so this table stays a status index, not a second copy that can drift from the real prompt.
+Each milestone's detailed Acceptance Criteria checklist is maintained separately to keep this table as a status index rather than a duplicative specification.
 
 ## What's explicitly NOT happening in MVP
 Per `docs/01` §1.5: voice/audio, interview scheduling, Google OAuth, background job queue, Redis/Kafka. Multi-provider **availability failover** IS built (M5.7, docs/16) — first-class routing, load-balancing, and provider-hopping per request are not. Don't build these even if it seems easy while touching nearby code.

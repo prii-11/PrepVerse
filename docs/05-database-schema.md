@@ -310,7 +310,7 @@ Submit → Interview.status: EVALUATING   (two CAS gates: IN_PROGRESS → SUBMIT
        → ReadinessService computes readiness on next read (not stored)
 ```
 
-This confirms the schema supports the full loop your friend's ChatGPT diagrammed, including the corrections: server-owned question IDs, per-answer evaluation status (so one failure doesn't nuke the whole interview), and a real source of truth for `skillCoverage`.
+This confirms the schema supports the full loop as designed, including the corrections: server-owned question IDs, per-answer evaluation status (so one failure doesn't nuke the whole interview), and a real source of truth for `skillCoverage`.
 
 The `SkillProfileService` state-transition logic is defined by Design 8: Gemini quality labels map deterministically to 0/1/2/3; same-skill assessments are aggregated per interview; the first evidence always establishes `assessed: true` with `level: BEGINNER`; subsequent updates use the rolling five-interview average and the one-tier-per-cycle cap.
 
