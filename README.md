@@ -12,6 +12,81 @@ PrepVerse helps candidates prepare for technical interviews through an AI-driven
 
 ---
 
+## System Flow
+
+```mermaid
+flowchart TD
+    %% User Actions
+    U[User] -->|Upload Resume| RU[Resume Upload]
+    U -->|Configure Interview| IC[Interview Config]
+    U -->|Submit Answers| IA[Answer Submission]
+    U -->|View Analytics| AR[Analytics Request]
+
+    %% Resume Pipeline
+    RU --> RUL[Upload Validation<br/>Type/Size/Sniff]
+    RUL --> RE[Text Extraction]
+    RE -->|Azure DI| ADI[Azure Document Intelligence]
+    RE -->|Local Fallback| LF[pdf-parse / mammoth]
+    ADI --> EX[Extracted Text]
+    LF --> EX
+    EX --> RA[Resume Analyzer<br/>AI Orchestrator]
+    RA -->|Validated| RS[RoleSkillCatalog<br/>Canonical skillKeys]
+    RA -->|Persisted| RP[Resume Document<br/>profileSyncStatus]
+
+    %% Interview Pipeline
+    IC --> IV[Interview Validation]
+    IV --> IQ[Question Generator<br/>AI Orchestrator]
+    IQ -->|Validated| QS[Questions + Metadata]
+    QS --> IS[Interview Created<br/>status: CREATED]
+
+    IS -->|Start| IP[Interview IN_PROGRESS]
+    IP --> IA
+    IA --> AE[Answer Evaluator<br/>AI Orchestrator]
+    AE -->|Validated| EV[Evaluation + TopicAssessments]
+    EV -->|Per Answer| ANS[Answer Document<br/>evaluation.status]
+    
+    %% Submission & Sync
+    IA -->|Submit| SUB[Submit Endpoint<br/>Atomic CAS]
+    SUB --> EVL[Full Evaluation<br/>All Answers]
+    EVL --> REP[Report Generation<br/>strengths/weaknesses/recommendations]
+    REP --> SYNC[SkillProfileService<br/>MongoDB Transaction]
+    SYNC -->|Update| CSP[User.currentSkillProfile<br/>EWMA + Confidence]
+    SYNC -->|Mark| RSY[report.profileSyncStatus<br/>COMPLETED/FAILED]
+    RSY --> COMP[Interview COMPLETED]
+
+    %% Analytics Pipeline
+    AR --> READ[ReadinessService<br/>Computed on Read]
+    READ -->|Aggregates| CSP
+    READ -->|Scores| RB[Readiness Breakdown<br/>technical/communication/coverage/consistency/trend]
+    READ -->|Returns| API[Analytics Response<br/>score + breakdown + interviewCount]
+
+    %% Cross-cutting
+    RA -.->|Logs| AIL[AIExecution<br/>Sanitized]
+    IQ -.->|Logs| AIL
+    AE -.->|Logs| AIL
+    SUB -.->|Idempotent| CAS[findOneAndUpdate<br/>409 on Conflict]
+    SYNC -.->|Transactions| TXN[MongoDB Transaction]
+
+    %% Auth
+    U -->|Register/Login| AUTH[Auth Module<br/>JWT Issuance]
+    AUTH -.->|Middleware| ALL[All Protected Routes]
+    ALL -.->|Ownership| OWN[findOne {_id, userId}]
+    
+    classDef user fill:#e3f2fd,stroke:#1976d2,stroke-width:2px;
+    classDef ai fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px;
+    classDef data fill:#e8f5e9,stroke:#388e3c,stroke-width:2px;
+    classDef process fill:#fff3e0,stroke:#f57c00,stroke-width:2px;
+    classDef security fill:#ffebee,stroke:#c62828,stroke-width:2px;
+
+    class U user;
+    class RA,IQ,AE,ADI,LF ai;
+    class RS,RP,CSP,REP,ANS,RB data;
+    class RUL,RE,EX,IV,QS,IS,IP,EVL,SUB,EV,SYNC,READ,CAS,TXN process;
+    class AUTH,ALL,OWN security;
+```
+
+---
+
 ## Architecture
 
 ```
