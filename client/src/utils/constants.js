@@ -1,19 +1,41 @@
-// Shared application constants used across the frontend.
-export const APP_NAME = 'AI Mock Interview Ecosystem';
+// Shared application constants: routes, navigation model, and domain vocabularies.
+export const APP_NAME = 'PrepVerse';
 
 export const ROUTES = {
+  landing: '/',
   login: '/login',
   signup: '/signup',
-  profile: '/profile',
-  dashboard: '/dashboard',
-  resumeUpload: '/resume/upload',
-  resumeAnalysis: '/resume/analysis',
+  home: '/home',
+  practice: '/practice',
+  interviews: '/interviews',
   interviewSetup: '/interview/setup',
-  interviewScreen: '/interview/screen',
-  interviewReport: '/report',
-  practicePlan: '/practice',
+  resume: '/resume',
   progress: '/progress',
+  profile: '/profile',
 };
+
+export const interviewRoomPath = (id) => `/interview/${id}`;
+export const reportPath = (id) => `/report/${id}`;
+export const resumeAnalysisPath = (id) => `/resume/${id}`;
+
+// Primary tab bar — rendered centered in the top navigation.
+export const NAV_TABS = [
+  { label: 'Home', to: ROUTES.home },
+  { label: 'Practice', to: ROUTES.practice },
+  { label: 'Interviews', to: ROUTES.interviews },
+  { label: 'Resume', to: ROUTES.resume },
+  { label: 'Progress', to: ROUTES.progress },
+];
+
+// Catalog-backed roles (RoleSkillCatalog.role — docs/05 §targetRole invariant).
+// The profile UI presents exactly these; there is no free-text role entry.
+export const TARGET_ROLES = ['Backend Developer', 'Frontend Developer', 'Full Stack Developer'];
+
+export const EXPERIENCE_LEVELS = ['Student', 'Entry', 'Junior'];
+
+export const DIFFICULTIES = ['Easy', 'Medium', 'Hard'];
+
+export const QUESTION_COUNTS = [3, 4, 5];
 
 // Backend failureReason codes (resume model + M6 tests) → human labels.
 export const FAILURE_REASON_LABELS = {

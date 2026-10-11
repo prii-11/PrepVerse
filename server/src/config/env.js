@@ -32,6 +32,16 @@ module.exports = {
   SUPABASE_KEY: process.env.SUPABASE_KEY, // required from M6 (storage)
   SUPABASE_BUCKET: process.env.SUPABASE_BUCKET, // required from M6 (storage)
 
+  // Azure Document Intelligence (M6.1 extraction fallback, docs/21) — all
+  // optional; config/di.js owns the enabled-require contract. A deployment
+  // that sets AZURE_DI_ENABLED but leaves endpoint/key unset fails fast at
+  // config/di.js require time; unset entirely → byte-identical M6 behavior.
+  AZURE_DI_ENABLED: process.env.AZURE_DI_ENABLED,
+  AZURE_DI_ENDPOINT: process.env.AZURE_DI_ENDPOINT,
+  AZURE_DI_KEY: process.env.AZURE_DI_KEY,
+  AZURE_DI_MODEL: process.env.AZURE_DI_MODEL,
+  AZURE_DI_TIMEOUT_MS: process.env.AZURE_DI_TIMEOUT_MS,
+
   // M5.7 AI provider chain (failover) — all optional; config/ai.js computes
   // the effective defaults (chain = ["gemini"], etc.). AI_PROVIDER_CHAIN
   // orders providers by priority (first = primary). AI_<PROVIDER>_MODELS is

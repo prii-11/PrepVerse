@@ -1,12 +1,8 @@
-// Signup screen — registers against the backend auth contract
-// (POST /auth/register). Registration auto-authenticates, so a successful
-// response carries a token and the user is taken to the dashboard.
+// Signup — email/password registration only. No social login, no invented steps.
 import { useState } from 'react';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { Eye, EyeOff } from 'lucide-react';
-import Button from '../../components/common/Button';
-import Input from '../../components/common/Input';
+import { Link, useNavigate } from 'react-router-dom';
+import Button from '../../components/ui/Button';
+import { Input } from '../../components/ui/Form';
 import useAuth from '../../hooks/useAuth';
 import { ROUTES } from '../../utils/constants';
 import { getErrorMessage } from '../../utils/helpers';
@@ -14,130 +10,88 @@ import { getErrorMessage } from '../../utils/helpers';
 export default function Signup() {
   const auth = useAuth();
   const navigate = useNavigate();
-  const [showPassword, setShowPassword] = useState(false);
-  const [form, setForm] = useState({
-    firstName: '',
-    lastName: '',
-    email: '',
-    password: '',
-    confirmPassword: '',
-  });
-  const [error, setError] = useState(null);
+  const [form, setForm] = useState({ firstName: '', lastName: '', email: '', password: '' });
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
 
-  if (auth.isAuthenticated) {
-    return <Navigate to={ROUTES.dashboard} replace />;
-  }
+  const update = (key) => (event) => setForm({ ...form, [key]: event.target.value });
 
-  const handleSubmit = async (event) => {
+  const submit = async (event) => {
     event.preventDefault();
-
-    if (form.password !== form.confirmPassword) {
-      setError('Passwords do not match');
-      return;
-    }
-
-    setError(null);
     setSubmitting(true);
-
+    setError(null);
     try {
-      await auth.signup({
-        firstName: form.firstName.trim(),
-        lastName: form.lastName.trim(),
-        email: form.email,
-        password: form.password,
-      });
-      navigate(ROUTES.dashboard, { replace: true });
-    } catch (signupError) {
-      setError(getErrorMessage(signupError, 'Signup failed. Please try again.'));
-    } finally {
+      await auth.signup(form);
+      navigate(ROUTES.home, { replace: true });
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not create your account. Please try again.'));
       setSubmitting(false);
     }
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-    >
-      <div className="text-center">
-        <p className="text-xs font-semibold uppercase tracking-widest text-[#6B8E23]">Free Access</p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#1F2937]">Create Account</h1>
-        <p className="mt-2 text-sm text-[#6B7280]">Join 10,000+ candidates today</p>
-      </div>
+    <div className="animate-rise">
+      <h1 className="text-2xl font-semibold tracking-tight text-ink">Create your account</h1>
+      <p className="mt-1.5 text-sm text-muted">Start practicing in minutes.</p>
 
-      <form className="mt-8 space-y-4" onSubmit={handleSubmit}>
-        <div className="grid grid-cols-2 gap-4">
+      <form onSubmit={submit} className="mt-8 space-y-5">
+        <div className="grid gap-5 sm:grid-cols-2">
           <Input
-            label="First Name"
-            placeholder="John"
-            required
+            label="First name"
+            name="firstName"
+            autoComplete="given-name"
             value={form.firstName}
-            onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+            onChange={update('firstName')}
+            required
           />
           <Input
-            label="Last Name"
-            placeholder="Doe"
-            required
+            label="Last name"
+            name="lastName"
+            autoComplete="family-name"
             value={form.lastName}
-            onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+            onChange={update('lastName')}
+            required
           />
         </div>
         <Input
-          label="Email Address"
+          label="Email"
+          name="email"
           type="email"
-          placeholder="john@example.com"
-          required
+          autoComplete="email"
+          placeholder="you@example.com"
           value={form.email}
-          onChange={(e) => setForm({ ...form, email: e.target.value })}
+          onChange={update('email')}
+          required
         />
         <Input
           label="Password"
-          type={showPassword ? 'text' : 'password'}
-          placeholder="••••••••"
-          required
+          name="password"
+          type="password"
+          autoComplete="new-password"
+          placeholder="At least 8 characters"
           value={form.password}
-          onChange={(e) => setForm({ ...form, password: e.target.value })}
-          rightElement={
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="focus:outline-none"
-            >
-              {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-            </button>
-          }
-        />
-        <Input
-          label="Confirm Password"
-          type={showPassword ? 'text' : 'password'}
-          placeholder="••••••••"
+          onChange={update('password')}
+          minLength={8}
           required
-          value={form.confirmPassword}
-          onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
         />
 
         {error ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <p role="alert" className="rounded-xl border border-danger/25 bg-danger-soft px-4 py-3 text-sm text-danger">
             {error}
-          </div>
+          </p>
         ) : null}
 
-        <Button className="w-full py-3 mt-2 text-base" type="submit" disabled={submitting}>
-          {submitting ? 'Creating account...' : 'Create Account'}
+        <Button type="submit" size="lg" loading={submitting} className="w-full">
+          Create Account
         </Button>
       </form>
 
-      <p className="mt-8 text-center text-sm text-[#6B7280]">
+      <p className="mt-6 text-center text-sm text-muted">
         Already have an account?{' '}
-        <Link
-          className="font-semibold text-[#556B2F] hover:text-[#6B8E23] transition-colors"
-          to={ROUTES.login}
-        >
+        <Link to={ROUTES.login} className="font-medium text-brand hover:text-brand-deep">
           Sign in
         </Link>
       </p>
-    </motion.div>
+    </div>
   );
 }

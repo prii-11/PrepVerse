@@ -1,26 +1,30 @@
-// Authentication service — the only caller of the auth endpoints
-// (docs/02 §3): register, login, logout, me. All calls flow through the
-// shared axios client so the Bearer token is attached automatically.
+// Authentication service — register, login, logout, me.
+// Posts through the shared axios client (docs/02 §3). The access token is
+// held in api.js module state only — never localStorage (docs/06 §5.4).
+// Response shapes:
+//   login/register → { token, user }
+//   me             → { user }
+//   logout         → { message }
 import api from './api';
 
 export const authService = {
-  async register(payload) {
-    const { data } = await api.post('/auth/register', payload);
-    return data; // { token, user }
+  async login({ email, password }) {
+    const { data } = await api.post('/auth/login', { email, password });
+    return data;
   },
 
-  async login(credentials) {
-    const { data } = await api.post('/auth/login', credentials);
-    return data; // { token, user }
+  async register({ firstName, lastName, email, password }) {
+    const { data } = await api.post('/auth/register', { firstName, lastName, email, password });
+    return data;
   },
 
   async me() {
     const { data } = await api.get('/auth/me');
-    return data; // { user }
+    return data;
   },
 
   async logout() {
     const { data } = await api.post('/auth/logout');
-    return data; // { message }
+    return data;
   },
 };

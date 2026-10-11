@@ -107,9 +107,12 @@ async function createResume(userId, { buffer, originalFilename, mimeType, size }
 
   // 3. Extract plain text from the file (docs/06 §4.2 bounds AI input size).
   //    Extraction failure does not destroy the upload — FAILED + errorCode.
+  //    M6.1 (docs/21): the storageKey rides along so the optional Azure DI
+  //    fallback can signed-URL the private object when local extraction
+  //    yields empty text (scanned PDFs). The key never leaves the server.
   let resumeText;
   try {
-    resumeText = await textExtractor.extractText(buffer, mimeType);
+    resumeText = await textExtractor.extractText(buffer, mimeType, { storageKey });
   } catch (extractErr) {
     return finalizeFailed(resume, userId, 'RESUME_TEXT_EXTRACTION_FAILED');
   }

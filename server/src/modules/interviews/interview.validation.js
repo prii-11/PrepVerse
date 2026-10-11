@@ -11,7 +11,9 @@ const idParamSchema = z.object({
 
 const answerBodySchema = z.object({
   questionId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'questionId must be a valid 24-character ObjectId'),
-  text: z.string().trim().min(1, 'text must be a non-empty string'),
+  // Blank answers are valid domain inputs: trim normalizes empty and
+  // whitespace-only submissions to the empty string before persistence.
+  text: z.string().trim(),
 });
 
 // POST /interviews body (docs/02 §3, docs/07 §3, M5.3). targetRole is checked

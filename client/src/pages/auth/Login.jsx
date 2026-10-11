@@ -1,12 +1,9 @@
-// Login screen — authenticates against the backend auth contract
-// (POST /auth/login) and navigates to the originally requested protected
-// route when one triggered the redirect.
+// Login — minimal, focused entry. No invented auth features (no Google,
+// no password recovery): the backend contract is email + password only.
 import { useState } from 'react';
-import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { Eye, EyeOff } from 'lucide-react';
-import Button from '../../components/common/Button';
-import Input from '../../components/common/Input';
+import { Link, useNavigate } from 'react-router-dom';
+import Button from '../../components/ui/Button';
+import { Input } from '../../components/ui/Form';
 import useAuth from '../../hooks/useAuth';
 import { ROUTES } from '../../utils/constants';
 import { getErrorMessage } from '../../utils/helpers';
@@ -14,94 +11,68 @@ import { getErrorMessage } from '../../utils/helpers';
 export default function Login() {
   const auth = useAuth();
   const navigate = useNavigate();
-  const location = useLocation();
-  const [showPassword, setShowPassword] = useState(false);
-  const [form, setForm] = useState({ email: '', password: '' });
-  const [error, setError] = useState(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
 
-  if (auth.isAuthenticated) {
-    return <Navigate to={ROUTES.dashboard} replace />;
-  }
-
-  const from = location.state?.from?.pathname || ROUTES.dashboard;
-
-  const handleSubmit = async (event) => {
+  const submit = async (event) => {
     event.preventDefault();
-    setError(null);
     setSubmitting(true);
-
+    setError(null);
     try {
-      await auth.login(form);
-      navigate(from, { replace: true });
-    } catch (loginError) {
-      setError(getErrorMessage(loginError, 'Login failed. Please try again.'));
-    } finally {
+      await auth.login({ email, password });
+      navigate(ROUTES.home, { replace: true });
+    } catch (cause) {
+      setError(getErrorMessage(cause, 'Could not sign you in. Check your email and password.'));
       setSubmitting(false);
     }
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-    >
-      <div className="text-center">
-        <p className="text-xs font-semibold uppercase tracking-widest text-[#6B8E23]">Enterprise Ready</p>
-        <h1 className="mt-2 text-3xl font-bold tracking-tight text-[#1F2937]">Welcome Back</h1>
-        <p className="mt-2 text-sm text-[#6B7280]">Please enter your details to sign in</p>
-      </div>
+    <div className="animate-rise">
+      <h1 className="text-2xl font-semibold tracking-tight text-ink">Welcome back</h1>
+      <p className="mt-1.5 text-sm text-muted">Sign in to continue preparing.</p>
 
-      <form className="mt-8 space-y-5" onSubmit={handleSubmit}>
+      <form onSubmit={submit} className="mt-8 space-y-5">
         <Input
-          label="Email Address"
+          label="Email"
+          name="email"
           type="email"
-          placeholder="name@company.com"
+          autoComplete="email"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
           required
-          value={form.email}
-          onChange={(e) => setForm({ ...form, email: e.target.value })}
         />
-        <div className="space-y-1">
-          <Input
-            label="Password"
-            type={showPassword ? 'text' : 'password'}
-            placeholder="••••••••"
-            required
-            value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
-            rightElement={
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="focus:outline-none"
-              >
-                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            }
-          />
-        </div>
+        <Input
+          label="Password"
+          name="password"
+          type="password"
+          autoComplete="current-password"
+          placeholder="••••••••"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          required
+        />
 
         {error ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <p role="alert" className="rounded-xl border border-danger/25 bg-danger-soft px-4 py-3 text-sm text-danger">
             {error}
-          </div>
+          </p>
         ) : null}
 
-        <Button className="w-full py-3 text-base" type="submit" disabled={submitting}>
-          {submitting ? 'Signing in...' : 'Sign In'}
+        <Button type="submit" size="lg" loading={submitting} className="w-full">
+          Sign In
         </Button>
       </form>
 
-      <p className="mt-8 text-center text-sm text-[#6B7280]">
-        Don't have an account?{' '}
-        <Link
-          className="font-semibold text-[#556B2F] hover:text-[#6B8E23] transition-colors"
-          to={ROUTES.signup}
-        >
+      <p className="mt-6 text-center text-sm text-muted">
+        New to PrepVerse?{' '}
+        <Link to={ROUTES.signup} className="font-medium text-brand hover:text-brand-deep">
           Create an account
         </Link>
       </p>
-    </motion.div>
+    </div>
   );
 }

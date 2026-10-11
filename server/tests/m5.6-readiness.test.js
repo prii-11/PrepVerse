@@ -30,7 +30,31 @@ const REPO_ROOT = execSync('git rev-parse --show-toplevel', { cwd: __dirname, en
 // reconciled docs/18 artifacts. Anything else in the tree (server/, root,
 // other docs) is contamination and must fail the guard.
 const M7_APPROVED_TREE_PREFIXES = ['client/'];
-const M7_APPROVED_TREE_FILES = ['docs/18-m7-frontend-recon.md', 'docs/18-azure-di-fallback-report.md', 'docs/19-m7-p3-resume-recon.md', 'server/tests/m5.1-ai-infra.test.js', 'server/tests/m5.6-readiness.test.js', 'server/src/modules/interviews/interview.service.js'];
+// M6.1 (Azure DI fallback, docs/21) is the approved server-side scope riding
+// inside this milestone's tree — the whitelist grows as approved work lands.
+const M7_APPROVED_TREE_FILES = [
+  'docs/18-m7-frontend-recon.md',
+  'docs/18-azure-di-fallback-report.md',
+  'docs/19-m7-p3-resume-recon.md',
+  'docs/20-m7-p4-interview-recon.md',
+  'docs/21-azure-di-extraction-audit.md',
+  'server/tests/m5.1-ai-infra.test.js',
+  'server/tests/m5.6-readiness.test.js',
+  'server/tests/m6-azure-extraction.test.js',
+  'server/tests/m6-resume-upload.test.js',
+  'server/src/config/di.js',
+  'server/src/config/env.js',
+  'server/src/modules/interviews/interview.validation.js',
+  'server/src/modules/interviews/interview.service.js',
+  'server/src/modules/resumes/resume.service.js',
+  'server/src/storage/azure.di.extractor.js',
+  'server/src/storage/textExtractor.js',
+  'server/.env.example',
+  'docs/02-architecture-api.md',
+  'server/src/ai/questionGenerator.js',
+  'server/src/ai/providers/gemini.js',
+  'server/src/ai/orchestrator.js',
+];
 
 function isM7ApprovedStatusLine(line) {
   const path = line.slice(3).trim(); // strip the "?? "/" M "/"M  " status prefix

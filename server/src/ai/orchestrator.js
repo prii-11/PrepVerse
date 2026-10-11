@@ -72,6 +72,32 @@ const OPERATION_REGISTRY = {
       null,
       2
     ),
+    // Gemini-compatible JSON Schema for structured output enforcement.
+    // Matches the Zod schema in schemas/resumeAnalysis.schema.js.
+    getResponseSchema() {
+      return {
+        type: 'object',
+        properties: {
+          extractedSkills: { type: 'array', items: { type: 'string' } },
+          experienceSummary: { type: 'string' },
+          projects: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                description: { type: 'string' },
+                technologies: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['name', 'description', 'technologies'],
+            },
+          },
+          strengths: { type: 'array', items: { type: 'string' } },
+          skillGaps: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['extractedSkills', 'experienceSummary', 'projects', 'strengths', 'skillGaps'],
+      };
+    },
     buildOutputSummary(result) {
       return {
         validationPassed: true,
@@ -110,6 +136,43 @@ const OPERATION_REGISTRY = {
       null,
       2
     ),
+    // Gemini-compatible JSON Schema for structured output enforcement.
+    // Matches the Zod schema in schemas/questionGeneration.schema.js.
+    getResponseSchema() {
+      return {
+        type: 'object',
+        properties: {
+          questions: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                text: { type: 'string' },
+                category: {
+                  type: 'string',
+                  enum: ['algorithms', 'data-structures', 'system-design', 'database', 'api-design', 'debugging', 'concurrency', 'behavioral'],
+                },
+                difficulty: { type: 'string', enum: ['easy', 'medium', 'hard'] },
+                expectedTopics: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      skillKey: { type: 'string' },
+                      topic: { type: 'string' },
+                    },
+                    required: ['skillKey', 'topic'],
+                  },
+                },
+              },
+              required: ['id', 'text', 'category', 'difficulty', 'expectedTopics'],
+            },
+          },
+        },
+        required: ['questions'],
+      };
+    },
     buildOutputSummary(result) {
       return {
         validationPassed: true,
@@ -145,6 +208,34 @@ const OPERATION_REGISTRY = {
       null,
       2
     ),
+    // Gemini-compatible JSON Schema for structured output enforcement.
+    // Matches the Zod schema in schemas/answerEvaluation.schema.js.
+    getResponseSchema() {
+      return {
+        type: 'object',
+        properties: {
+          correctness: { type: 'number' },
+          technicalDepth: { type: 'number' },
+          communication: { type: 'number' },
+          strengths: { type: 'array', items: { type: 'string' } },
+          weaknesses: { type: 'array', items: { type: 'string' } },
+          improvementTip: { type: 'string' },
+          topicAssessments: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                skillKey: { type: 'string' },
+                addressed: { type: 'boolean' },
+                quality: { type: 'string', enum: ['missing', 'weak', 'good', 'strong'] },
+              },
+              required: ['skillKey', 'addressed', 'quality'],
+            },
+          },
+        },
+        required: ['correctness', 'technicalDepth', 'communication', 'strengths', 'weaknesses', 'improvementTip', 'topicAssessments'],
+      };
+    },
     buildOutputSummary(result, input) {
       // Soft review signal (docs/07 §4): perfect score on a suspiciously short
       // answer is flagged, never blocked — false positives are acceptable.
@@ -407,7 +498,8 @@ async function run(operation, payload) {
 
       let providerResult;
       try {
-        providerResult = await candidate.adapter.generate(promptText, { model: candidate.model });
+        const responseSchema = typeof config.getResponseSchema === 'function' ? config.getResponseSchema() : undefined;
+        providerResult = await candidate.adapter.generate(promptText, { model: candidate.model, responseSchema });
         attempts += 1;
       } catch (error) {
         attempts += 1;

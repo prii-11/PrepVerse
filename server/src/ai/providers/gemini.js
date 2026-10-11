@@ -49,12 +49,18 @@ function extractUpstreamStatus(error) {
   return null;
 }
 
-async function generate(prompt, { model } = {}) {
+async function generate(prompt, { model, responseSchema } = {}) {
   const startedAt = Date.now();
   try {
+    const generationConfig = { responseMimeType: 'application/json' };
+    if (responseSchema) {
+      generationConfig.responseSchema = responseSchema;
+    }
+
     const result = await getModel(model).generateContent(
       {
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig,
       },
       { timeout: AI_CONFIG.timeoutMs }
     );

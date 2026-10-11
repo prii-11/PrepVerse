@@ -25,6 +25,8 @@ const mongoose = require('mongoose');
 const app = require('../src/app');
 const Resume = require('../src/modules/resumes/resume.model');
 const storageClient = require('../src/storage/storage.client');
+const azureDi = require('../src/storage/azure.di.extractor');
+const { DI_CONFIG } = require('../src/config/di');
 const { extractText } = require('../src/storage/textExtractor');
 const resumeAnalyzer = require('../src/ai/resumeAnalyzer');
 const userService = require('../src/modules/users/user.service');
@@ -46,6 +48,7 @@ let seamDelete;
 let seamSign;
 let seamAnalyze;
 let seamProfile;
+let seamAzure;
 
 const VALID_ANALYSIS = {
   extractedSkills: ['javascript', 'nodejs'],
@@ -192,6 +195,10 @@ function buildMinimalDocx(text) {
 const PDF_FIXTURE = buildMinimalPdf('JavaScript and Node.js experience.');
 const DOCX_FIXTURE = buildMinimalDocx('React and Node.js developer.');
 const GARBAGE_PDF = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(512, 0x41)]);
+// Scanned/image-only surrogate: a well-formed PDF that parses fine but
+// yields NO text locally — the one case that triggers the Azure DI fallback
+// (docs/21 §6).
+const EMPTY_TEXT_PDF = buildMinimalPdf('');
 
 // ---- DB + HTTP lifecycle ----------------------------------------------------
 
@@ -204,6 +211,10 @@ test.before(async () => {
   seamSign = mock.method(storageClient, 'signedUrl', async () => 'https://test.supabase.co/storage/v1/object/sign/resumes/users/x/a.pdf?token=abc');
   seamAnalyze = mock.method(resumeAnalyzer, 'analyzeResume', async () => VALID_ANALYSIS);
   seamProfile = mock.method(userService, 'getProfile', async () => ({ targetRole: 'Backend Developer', experienceLevel: 'Entry' }));
+  // Azure DI fallback seam (M6.1, docs/21): mocked like the other module
+  // seams; DI is DISABLED by default in this file (no AZURE_DI_* env), so
+  // the mock never fires unless a test explicitly enables it.
+  seamAzure = mock.method(azureDi, 'extractDocument', async () => 'Azure OCR extracted text from Document Intelligence.');
   httpServer = app.listen(0);
   await new Promise((resolve) => httpServer.once('listening', resolve));
   baseUrl = `http://127.0.0.1:${httpServer.address().port}/api/v1`;
@@ -225,6 +236,8 @@ beforeEach(() => {
   seamSign = mock.method(storageClient, 'signedUrl', async () => 'https://test.supabase.co/storage/v1/object/sign/resumes/users/x/a.pdf?token=abc');
   seamAnalyze = mock.method(resumeAnalyzer, 'analyzeResume', async () => VALID_ANALYSIS);
   seamProfile = mock.method(userService, 'getProfile', async () => ({ targetRole: 'Backend Developer', experienceLevel: 'Entry' }));
+  seamAzure = mock.method(azureDi, 'extractDocument', async () => 'Azure OCR extracted text from Document Intelligence.');
+  DI_CONFIG.enabled = false;
 });
 
 async function seedResume(overrides = {}) {
@@ -407,6 +420,97 @@ test('M6-P2-8b. unreadable file content → FAILED RESUME_TEXT_EXTRACTION_FAILED
   assert.equal(body.status, 'FAILED');
   assert.equal(body.failureReason, 'RESUME_TEXT_EXTRACTION_FAILED');
   assert.equal(seamAnalyze.mock.calls.length, 0, 'no AI call on unreadable text');
+});
+
+// ---- M6.1: Azure DI fallback (docs/21) --------------------------------------
+// DI is DISABLED by default here (DI_CONFIG.enabled=false in beforeEach);
+// the fallback tests below enable it explicitly via the config object
+// (same instance textExtractor reads) and mock the azure module seam.
+
+test('M6-P2-8c. empty-text PDF + DI disabled → FAILED, azure never called (M6 behavior preserved)', async () => {
+  const userId = new mongoose.Types.ObjectId();
+  const res = await postResume(userId, uploadForm(EMPTY_TEXT_PDF, 'scanned.pdf', 'application/pdf'));
+  assert.equal(res.status, 201);
+  const body = await res.json();
+  assert.equal(body.status, 'FAILED');
+  assert.equal(body.failureReason, 'RESUME_TEXT_EXTRACTION_FAILED');
+  assert.equal(seamAzure.mock.calls.length, 0, 'fallback must not fire when disabled');
+  assert.equal(seamAnalyze.mock.calls.length, 0);
+});
+
+test('M6-P2-8d. empty-text PDF + DI enabled + azure success → 201 ANALYZED with azure text', async () => {
+  DI_CONFIG.enabled = true;
+  try {
+    const userId = new mongoose.Types.ObjectId();
+    const res = await postResume(userId, uploadForm(EMPTY_TEXT_PDF, 'scanned.pdf', 'application/pdf'));
+    assert.equal(res.status, 201);
+    const body = await res.json();
+    assert.equal(body.status, 'ANALYZED');
+    assert.equal(body.failureReason, null);
+
+    // Azure received the signed URL of the private object.
+    assert.equal(seamAzure.mock.calls.length, 1, 'azure fallback attempted exactly once');
+    assert.equal(seamSign.mock.calls.length, 1, 'one signed URL issued for the fallback');
+    assert.match(seamSign.mock.calls[0].arguments[0], /^users\/[a-f0-9]{24}\/resumes\/[0-9a-f-]{36}\.pdf$/);
+    assert.equal(
+      seamAzure.mock.calls[0].arguments[0],
+      'https://test.supabase.co/storage/v1/object/sign/resumes/users/x/a.pdf?token=abc',
+      'azure receives the signed URL, not the raw file, not the user URL'
+    );
+
+    // The OCR text reached ResumeAnalyzer through the existing seam.
+    const analyzeCalls = seamAnalyze.mock.calls;
+    assert.equal(analyzeCalls.length, 1);
+    const params = analyzeCalls[0].arguments[0];
+    assert.equal(params.resumeText, 'Azure OCR extracted text from Document Intelligence.');
+
+    const saved = await Resume.findOne({ _id: body._id, userId });
+    assert.equal(saved.status, 'ANALYZED');
+    const savedObject = saved.toObject();
+    assert.ok(!('resumeText' in savedObject) && !('extractedText' in savedObject), 'raw extracted text is never persisted (docs/21 §12)');
+    assert.equal(
+      saved.analysis.promptVersion,
+      'resume-analysis-v1',
+      'structured analysis persisted as usual — only the normalized text was transient'
+    );
+  } finally {
+    DI_CONFIG.enabled = false;
+  }
+});
+
+test('M6-P2-8e. empty-text PDF + DI enabled + azure failure → FAILED RESUME_TEXT_EXTRACTION_FAILED, no AI call', async () => {
+  seamAzure.mock.mockImplementation(async () => {
+    throw new azureDi.AzureDiError('PROVIDER_UNAVAILABLE', 'Document Intelligence service unavailable', { upstreamStatus: 503 });
+  });
+  DI_CONFIG.enabled = true;
+  try {
+    const userId = new mongoose.Types.ObjectId();
+    const res = await postResume(userId, uploadForm(EMPTY_TEXT_PDF, 'scanned.pdf', 'application/pdf'));
+    assert.equal(res.status, 201);
+    const body = await res.json();
+    assert.equal(body.status, 'FAILED');
+    assert.equal(body.failureReason, 'RESUME_TEXT_EXTRACTION_FAILED', 'azure failure funnels into the unchanged FAILED taxonomy');
+    assert.equal(seamAzure.mock.calls.length, 1, 'fallback attempted once');
+    assert.equal(seamAnalyze.mock.calls.length, 0, 'nothing reaches the AI boundary');
+    assert.equal(seamDelete.mock.calls.length, 0, 'object retained (D4)');
+  } finally {
+    DI_CONFIG.enabled = false;
+  }
+});
+
+test('M6-P2-8f. text-bearing PDF + DI enabled → azure NOT called (local-first)', async () => {
+  DI_CONFIG.enabled = true;
+  try {
+    const userId = new mongoose.Types.ObjectId();
+    const res = await postResume(userId, uploadForm(PDF_FIXTURE, 'resume.pdf', 'application/pdf'));
+    assert.equal(res.status, 201);
+    const body = await res.json();
+    assert.equal(body.status, 'ANALYZED');
+    assert.equal(seamAzure.mock.calls.length, 0, 'local success never reaches azure');
+    assert.equal(seamSign.mock.calls.length, 0, 'no signed URL issued');
+  } finally {
+    DI_CONFIG.enabled = false;
+  }
 });
 
 // ---- P2: textExtractor unit behavior -----------------------------------------

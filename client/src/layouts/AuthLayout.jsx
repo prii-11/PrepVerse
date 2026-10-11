@@ -1,10 +1,15 @@
-// Authentication layout that centers login and signup screens.
+// AuthLayout — centered card wrapper for login and signup.
 import { Outlet } from 'react-router-dom';
+import { BrandMark } from '../components/layout/Brand';
 
 export default function AuthLayout() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#F8F9F5] px-4 py-12 text-[#1F2937]">
-      <div className="w-full max-w-[500px] rounded-2xl border border-[#E5E7EB] bg-white p-8 shadow-[0_24px_80px_rgba(85,107,47,0.1)] md:p-10">
+    <div className="flex min-h-screen flex-col items-center justify-center px-4 py-12">
+      <div className="w-full max-w-[480px] animate-rise rounded-2xl border border-line bg-paper p-8 shadow-card md:p-10">
+        <div className="mb-8 flex items-center gap-2.5">
+          <BrandMark />
+          <span className="text-[17px] font-semibold tracking-tight text-ink">PrepVerse</span>
+        </div>
         <Outlet />
       </div>
     </div>
